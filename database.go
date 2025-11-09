@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -13,7 +14,10 @@ import (
 var DbInstance *sql.DB
 
 func ConnectDB() error {
-	connStr := ""
+	connStr := os.Getenv("DB_CONN_STRING")
+	if connStr == "" {
+		return fmt.Errorf("DB_CONN_STRING tidak ditemukan di environment")
+	}
 
 	var err error
 	DbInstance, err = sql.Open("pgx", connStr)
