@@ -21,14 +21,16 @@ func main() {
 	}
 
 	if err := LoadCache(); err != nil {
-		log.Printf("PERINGATAN: Gagal memuat cache (file mungkin belum ada): %v", err)
-	} else {
-		log.Println("✅ Cache query berhasil dimuat ke memori.")
+		log.Printf("PERINGATAN: Gagal memuat cache: %v", err)
+	}
+
+	if err := InitVectorService(); err != nil {
+		log.Fatalf("Fatal Error: Gagal koneksi ke Qdrant (Database Vektor): %v", err)
 	}
 
 	log.Println("Aplikasi siap berjalan...")
 	RegisterRoutes()
 	port := ":8080"
 	log.Printf("Server web berjalan di http://localhost%s\n", port)
-	log.Fatal(http.ListenAndServe(port, nil))
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
