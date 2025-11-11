@@ -113,8 +113,7 @@ Diberikan beberapa CONTOH DDL dan SQL yang paling relevan dengan pertanyaan user
 Tugas Anda:
 1. Jawab pertanyaan pengguna di bawah ini dengan menulis SATU query SQL PostgreSQL yang valid.
 2. JANGAN pakai markdown (sql). JANGAN tambahkan penjelasan. Hanya SQL.
-3. Selalu prioritaskan rekening yang 'id_status_rekening = 1' (Aktif).
-4. Untuk pencarian teks atau nama, WAJIB gunakan 'ILIKE' dengan pola '%%'.
+3. Untuk pencarian teks atau nama, WAJIB gunakan 'ILIKE' dengan pola '%'.
 
 Pertanyaan Pengguna: "%s"
 
