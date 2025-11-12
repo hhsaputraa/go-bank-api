@@ -14,16 +14,18 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-func GetSQL(userPrompt string) (string, error) {
+func GetSQL(userPrompt string) (AISqlResponse, error) {
 	log.Println("Memanggil AI Service (dengan semantic cache)...")
-	newSQL, err := getSQLFromAI_Groq(userPrompt)
+
+	aiResp, err := getSQLFromAI_Groq(userPrompt)
 	if err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
-	if newSQL == "" {
-		return "", errors.New("AI tidak mengembalikan query")
+	if aiResp.SQL == "" {
+		return AISqlResponse{}, errors.New("AI tidak mengembalikan query")
 	}
-	return newSQL, nil
+
+	return aiResp, nil
 }
 
 func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {

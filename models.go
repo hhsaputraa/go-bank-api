@@ -15,3 +15,10 @@ type FeedbackRequest struct {
 	PromptAsli string `json:"prompt_asli"`
 	SqlKoreksi string `json:"sql_koreksi"`
 }
+
+type AISqlResponse struct {
+	SQL        string
+	Vector     []float32
+	PromptAsli string
+	IsCached   bool
+}

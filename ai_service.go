@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
-	"github.com/google/uuid" // Pastikan import ini ada
+	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/api/option"
 )
@@ -22,23 +22,17 @@ import (
 var qdrantClient *pb.Client
 var geminiEmbedder *genai.EmbeddingModel
 
-// === KONSTANTA BARU PINDAH KE BAWAH BERSAMA HELPER LAINNYA ===
-
 func InitVectorService() error {
 	ctx := context.Background()
 
 	googleApiKey := os.Getenv("GOOGLE_API_KEY")
-	if googleApiKey == "" {
-		return errors.New("GOOGLE_API_KEY tidak ditemukan di .env")
-	}
 
 	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(googleApiKey))
 	if err != nil {
 		return fmt.Errorf("gagal membuat client Gemini: %w", err)
 	}
-	geminiEmbedder = geminiClient.EmbeddingModel(EMBEDDING_MODEL) // EMBEDDING_MODEL dari train.go
+	geminiEmbedder = geminiClient.EmbeddingModel(EMBEDDING_MODEL)
 
-	// 1. Inisialisasi gRPC client (HANYA untuk RAG .Query())
 	client, err := pb.NewClient(&pb.Config{
 		Host: "localhost",
 		Port: 6334,
@@ -48,14 +42,11 @@ func InitVectorService() error {
 	}
 	qdrantClient = client
 
-	// 2. Inisialisasi REST client (Untuk Cache: Search, Upsert, Create)
 	qdrantBase := getQdrantBaseURL()
 	log.Printf("Memastikan collection cache '%s' ada via REST...", QDRANT_CACHE_COLLECTION)
-	const vectorSize = 768 // Harus sama dengan model embedding
+	const vectorSize = 768
 
-	// Gunakan helper qdrantCreateCollection (dari train.go)
 	if err := qdrantCreateCollection(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, vectorSize, "Cosine"); err != nil {
-		// qdrantCreateCollection helper sudah di-update di bawah untuk menangani "already exists"
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
 
@@ -77,19 +68,16 @@ type GroqResponse struct {
 	} `json:"choices"`
 }
 
-func getSQLFromAI_Groq(userPrompt string) (string, error) {
+func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	apiKey := os.Getenv("GROQ_API_KEY")
-	if apiKey == "" {
-		return "", errors.New("GROQ_API_KEY tidak ditemukan di environment")
-	}
 	ctx := context.Background()
 	qdrantBase := getQdrantBaseURL()
 
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(userPrompt))
 	if err != nil {
-		return "", fmt.Errorf("gagal embed prompt user: %w", err)
+		return AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
 	}
 	promptVector := res.Embedding.Values
 
@@ -108,48 +96,39 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 		log.Printf("PERINGATAN: Gagal mencari di cache Qdrant: %v", err)
 	}
 
-	// Periksa apakah ada hasil yang lolos threshold
 	if len(cacheResponse.Result) > 0 {
-		// Kita dapat hasil teratas, sekarang cek skornya
 		cachedPoint := cacheResponse.Result[0]
-		topScore := cachedPoint.Score // Ambil skornya
+		topScore := cachedPoint.Score
 
 		if topScore >= cacheThreshold {
-			// Skor LULUS threshold!
 			if cachedSql, ok := cachedPoint.Payload["sql_query"]; ok {
 				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f (Melebihi Threshold: %f)", topScore, cacheThreshold)
-				return cachedSql.(string), nil // Lakukan type assertion
+				return AISqlResponse{SQL: cachedSql.(string), IsCached: true}, nil
 			} else {
-				// Seharusnya tidak terjadi, tapi bagus untuk dicatat
 				log.Printf("CACHE MISS. Ditemukan item cache (Skor: %f) tapi payload 'sql_query' hilang.", topScore)
 			}
 		} else {
-			// Skor GAGAL threshold
 			log.Printf("CACHE MISS. Skor tertinggi: %f (Dibawah Threshold: %f)", topScore, cacheThreshold)
 		}
 	} else {
-		// Qdrant tidak menemukan apa-apa
 		log.Println("CACHE MISS. Tidak ada item cache yang cocok ditemukan.")
 	}
 
-	// Hapus "CACHE MISS" dari log ini
 	log.Println("Memanggil RAG (gRPC) + Groq AI...")
 
-	// === LANGKAH 3: PROSES RAG (Tetap pakai gRPC, karena sudah bekerja) ===
 	log.Println("Mencari konteks relevan di Qdrant (RAG)...")
 	var searchLimit uint64 = 7
 
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
-		CollectionName: QDRANT_COLLECTION_NAME, // Ini collection RAG
+		CollectionName: QDRANT_COLLECTION_NAME,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
 		Limit:          &searchLimit,
 	})
 	if err != nil {
-		return "", fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
+		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
 
-	// ... (Kode perakitan RAG, DDL, dan finalPrompt Anda SAMA PERSIS) ...
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
 	for _, point := range searchResponse {
@@ -169,7 +148,7 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 	sqlContext := contextBuilder.String()
 	allDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
-		return "", fmt.Errorf("gagal mengambil DDL dinamis untuk prompt: %w", err)
+		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis untuk prompt: %w", err)
 	}
 	allDDLString := strings.Join(allDDLs, "\n---\n")
 
@@ -194,84 +173,64 @@ Pertanyaan Pengguna: "%s"
 
 Query SQL:`,
 		time.Now().Format("2006-01-02"),
-		allDDLString, // <-- KAMUS LENGKAP
-		sqlContext,   // <-- CONTOH RELEVAN
+		allDDLString,
+		sqlContext,
 		userPrompt,
 	)
 
-	// ... (Kode Groq Request & Call SAMA PERSIS) ...
 	groqReqBody := GroqRequest{
 		Model:    "llama-3.1-8b-instant",
 		Messages: []GroqMessage{{Role: "user", Content: finalPrompt}},
 	}
 	jsonBody, err := json.Marshal(groqReqBody)
 	if err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
 	req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(jsonBody))
 	if err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
 	defer resp.Body.Close()
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
+		return AISqlResponse{}, fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
 	}
 	var groqResp GroqResponse
 	if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
-		return "", err
+		return AISqlResponse{}, err
 	}
 	if len(groqResp.Choices) == 0 {
-		return "", errors.New("AI tidak memberikan balasan")
+		return AISqlResponse{}, errors.New("AI tidak memberikan balasan")
 	}
 
 	sqlQuery := strings.TrimSpace(groqResp.Choices[0].Message.Content)
 	sqlQuery = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(sqlQuery, "```sql"), "```"))
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 
-	// === LANGKAH 4: SIMPAN KE SEMANTIC CACHE (Menggunakan REST) ===
-	if sqlQuery != "" {
-		log.Println("Menyimpan hasil ke Semantic Cache (REST)...")
-
-		// Buat point baru menggunakan struct qdrantPoint (dari train.go)
-		newPoint := qdrantPoint{
-			ID:     uuid.NewString(), // ID harus UUID string
-			Vector: promptVector,     // Ini sudah []float32
-			Payload: map[string]interface{}{
-				"prompt_asli": userPrompt,
-				"sql_query":   sqlQuery,
-			},
-		}
-
-		// Gunakan helper qdrantUpsertPoints (dari train.go)
-		err := qdrantUpsertPoints(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, []qdrantPoint{newPoint})
-		if err != nil {
-			log.Printf("PERINGATAN: Gagal menyimpan ke cache Qdrant: %v", err)
-		}
-	}
-
-	return sqlQuery, nil
+	return AISqlResponse{
+		SQL:        sqlQuery,
+		Vector:     promptVector,
+		PromptAsli: userPrompt,
+		IsCached:   false,
+	}, nil
 }
 
-// --- Helper Qdrant REST API (Disalin & Dimodifikasi dari train.go) ---
-// --- KONSTANTA ---
 const (
-	QDRANT_COLLECTION_NAME  = "bpr_supra_rag"             // Dari train.go
-	EMBEDDING_MODEL         = "models/text-embedding-004" // Dari train.go
-	QDRANT_CACHE_COLLECTION = "bpr_supra_cache"           // Baru
+	QDRANT_COLLECTION_NAME  = "bpr_supra_rag"
+	EMBEDDING_MODEL         = "models/text-embedding-004"
+	QDRANT_CACHE_COLLECTION = "bpr_supra_cache"
 )
 
-// --- STRUCTS ---
 type qdrantCreateCollectionReq struct {
 	Vectors qdrantVectors `json:"vectors"`
 }
@@ -283,16 +242,13 @@ type qdrantUpsertPointsReq struct {
 	Points []qdrantPoint `json:"points"`
 }
 
-// qdrantPoint sekarang HARUS menyertakan Vector (bukan omitempty) untuk upsert cache
 type qdrantPoint struct {
 	ID      string                 `json:"id"`     // string UUID
 	Vector  []float32              `json:"vector"` // BUKAN omitempty
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
-// --- FUNGSI HELPER (Disalin dari train.go) ---
 func getQdrantBaseURL() string {
-	// (Saya asumsikan .env sudah di-load oleh main.go)
 	base := os.Getenv("QDRANT_URL")
 	if base == "" {
 		base = "http://localhost:6333"
@@ -334,7 +290,6 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	return resp, respBody, nil
 }
 
-// Dimodifikasi untuk InitVectorService: Tidak error jika "already exists"
 func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int, distance string) error {
 	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
 	req := qdrantCreateCollectionReq{
@@ -350,20 +305,18 @@ func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int,
 
 	if resp.StatusCode == http.StatusOK {
 		log.Printf("Berhasil membuat collection '%s'.", name)
-		return nil // Sukses
+		return nil
 	}
 
-	// Jika status 400 (Bad Request) dan pesan "already exists", itu BUKAN error
 	if (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusConflict) &&
 		strings.Contains(string(body), "already exists") {
 		log.Printf("Collection '%s' sudah ada, tidak perlu dibuat ulang.", name)
-		return nil // Dianggap sukses
+		return nil
 	}
 
 	return fmt.Errorf("create collection status %d: %s", resp.StatusCode, string(body))
 }
 
-// Disalin dari train.go
 func qdrantUpsertPoints(ctx context.Context, baseURL, name string, points []qdrantPoint) error {
 	url := fmt.Sprintf("%s/collections/%s/points?wait=true", baseURL, name)
 	req := qdrantUpsertPointsReq{Points: points}
@@ -377,7 +330,6 @@ func qdrantUpsertPoints(ctx context.Context, baseURL, name string, points []qdra
 	return nil
 }
 
-// === FUNGSI BARU UNTUK SEARCH (REST API) ===
 type qdrantSearchReq struct {
 	Vector         []float32 `json:"vector"`
 	Limit          uint64    `json:"limit"`
@@ -392,7 +344,7 @@ type qdrantSearchResp struct {
 }
 
 type qdrantSearchResult struct {
-	ID      interface{}            `json:"id"` // Bisa string UUID atau uint
+	ID      interface{}            `json:"id"`
 	Version int                    `json:"version"`
 	Score   float32                `json:"score"`
 	Payload map[string]interface{} `json:"payload"`
@@ -414,4 +366,29 @@ func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSea
 		return respData, fmt.Errorf("gagal unmarshal search response: %w", err)
 	}
 	return respData, nil
+}
+
+func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
+	go func() {
+		ctx := context.Background()
+		qdrantBase := getQdrantBaseURL()
+
+		log.Println("Menyimpan hasil (yang sudah tervalidasi) ke Semantic Cache (REST)...")
+
+		newPoint := qdrantPoint{
+			ID:     uuid.NewString(),
+			Vector: promptVector,
+			Payload: map[string]interface{}{
+				"prompt_asli": promptAsli,
+				"sql_query":   sqlQuery,
+			},
+		}
+
+		err := qdrantUpsertPoints(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, []qdrantPoint{newPoint})
+		if err != nil {
+			log.Printf("PERINGATAN: Gagal menyimpan ke cache Qdrant: %v", err)
+		} else {
+			log.Println("Berhasil menyimpan ke cache.")
+		}
+	}()
 }

@@ -47,22 +47,30 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Menerima Prompt (Normalized): %s\n", normalizedPrompt)
 
-	sqlQuery, err := GetSQL(normalizedPrompt)
+	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if sqlQuery == "" {
+	if aiResp.SQL == "" {
 		respondWithError(w, http.StatusBadRequest, "AI tidak mengembalikan query SQL.")
 		return
 	}
-	log.Println("SQL yang akan dieksekusi:", sqlQuery)
 
-	data, err := ExecuteDynamicQuery(sqlQuery, nil)
+	log.Println("SQL yang akan dieksekusi:", aiResp.SQL)
+
+	data, err := ExecuteDynamicQuery(aiResp.SQL, nil)
+
 	if err != nil {
+		log.Printf("GAGAL EKSEKUSI: %v. SQL 'ngawur' TIDAK akan disimpan ke cache.", err)
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	if !aiResp.IsCached {
+		SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
+	}
+
 	respondWithJSON(w, http.StatusOK, data)
 }
 

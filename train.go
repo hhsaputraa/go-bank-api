@@ -78,7 +78,7 @@ func mainTrain() {
 
 		point := qdrantPoint{
 			ID:     uuid.NewString(),
-			Vector: res.Embedding.Values, // []float32 dari SDK genai
+			Vector: res.Embedding.Values,
 			Payload: map[string]interface{}{
 				"content": contekan,
 			},
