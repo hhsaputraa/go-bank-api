@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	mainTrain()
+	// mainTrain()
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Peringatan: Tidak bisa memuat file .env")

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 func getSchemaFromConnStr() (string, error) {
@@ -133,4 +134,30 @@ func GetDynamicSqlExamples() ([]string, error) {
 		log.Printf("✅ Berhasil! mengambil %d contoh SQL dinamis.", len(contexts))
 	}
 	return contexts, nil
+}
+
+func AddSqlExample(promptAsli string, sqlKoreksi string) error {
+	if DbInstance == nil {
+		return fmt.Errorf("koneksi database (DbInstance) belum siap")
+	}
+
+	promptExample := fmt.Sprintf("-- Pertanyaan: \"%s\"", promptAsli)
+
+	query := `
+	INSERT INTO bpr_supra.rag_sql_examples 
+		(prompt_example, sql_example) 
+	VALUES 
+		($1, $2)
+	`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
+	if err != nil {
+		return fmt.Errorf("gagal insert contekan baru ke DB: %w", err)
+	}
+
+	log.Printf("✅ Berhasil! Menyimpan contekan baru ke 'rag_sql_examples' untuk prompt: %s", promptAsli)
+	return nil
 }
