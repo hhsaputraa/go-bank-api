@@ -171,11 +171,20 @@ func mainTrain() {
 	}
 
 	log.Println("Mulai 'melatih' (meng-embed dan menyimpan) contekan...")
+
 	dynamicDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
 		log.Fatalf("Gagal mengambil DDL dinamis: %v", err)
 	}
-	allContekan := append(dynamicDDLs, sqlContekan...)
+
+	dynamicSQLExamples, err := GetDynamicSqlExamples()
+	if err != nil {
+		log.Fatalf("Gagal mengambil contoh SQL dinamis: %v", err)
+	}
+
+	allContekan := append(dynamicDDLs, dynamicSQLExamples...)
+
+	log.Printf("Total %d potongan konteks (DDL + Contoh SQL) akan di-embed.", len(allContekan))
 
 	points := make([]qdrantPoint, 0, len(allContekan))
 

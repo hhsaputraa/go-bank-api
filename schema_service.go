@@ -93,3 +93,44 @@ func GetDynamicSchemaContext() ([]string, error) {
 	log.Printf("✅ Berhasil! Mengambil %d potongan DDL dinamis.", len(contexts))
 	return contexts, nil
 }
+
+func GetDynamicSqlExamples() ([]string, error) {
+	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
+	if DbInstance == nil {
+		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
+	}
+
+	query := `
+	SELECT
+		prompt_example,
+		sql_example
+	FROM
+		bpr_supra.rag_sql_examples
+	ORDER BY
+		id;
+	`
+	rows, err := DbInstance.QueryContext(context.Background(), query)
+	if err != nil {
+		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
+	}
+	defer rows.Close()
+
+	var contexts []string
+
+	for rows.Next() {
+		var promptExample, sqlExample string
+		if err := rows.Scan(&promptExample, &sqlExample); err != nil {
+			return nil, err
+		}
+
+		fullContekan := fmt.Sprintf("%s\n%s", promptExample, sqlExample)
+		contexts = append(contexts, fullContekan)
+	}
+
+	if len(contexts) == 0 {
+		log.Println("PERINGATAN: Tidak ada contoh SQL ditemukan di tabel 'rag_sql_examples'.")
+	} else {
+		log.Printf("✅ Berhasil! mengambil %d contoh SQL dinamis.", len(contexts))
+	}
+	return contexts, nil
+}

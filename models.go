@@ -10,3 +10,8 @@ type QueryRequest struct {
 type PromptRequest struct {
 	Prompt string `json:"prompt"`
 }
+
+type FeedbackRequest struct {
+	PromptAsli string `json:"prompt_asli"`
+	SqlKoreksi string `json:"sql_koreksi"`
+}

@@ -77,7 +77,7 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 	promptVector := res.Embedding.Values
 
 	log.Println("Mencari konteks relevan di Qdrant...")
-	var searchLimit uint64 = 3
+	var searchLimit uint64 = 7
 
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: QDRANT_COLLECTION_NAME,
@@ -104,23 +104,56 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 	}
 	log.Println("Konteks RAG Dinamis berhasil dirakit.")
 
+	// === TAMBAHAN KODE UNTUK DEBUGGING ===
+	// Simpan hasil rakitan ke variabel
+	contextContent := contextBuilder.String()
+
+	// Cetak "Bukti Perakitan" ke log
+	log.Printf("--- BUKTI PERAKITAN RAG (Konteks) ---\n%s\n--------------------------------------", contextContent)
+	// === BATAS TAMBAHAN KODE ===
+
+	log.Println("Konteks RAG Dinamis (HANYA SQL) berhasil dirakit.")
+
+	// Simpan contekan SQL
+	sqlContext := contextBuilder.String()
+
+	// === SOLUSI PAMUNGKAS DIMULAI ===
+	// 1. Ambil SEMUA DDL dari Postgres (secara deterministik)
+	allDDLs, err := GetDynamicSchemaContext() // Anda sudah punya fungsi ini
+	if err != nil {
+		return "", fmt.Errorf("gagal mengambil DDL dinamis untuk prompt: %w", err)
+	}
+	// Gabungkan semua DDL jadi satu string
+	allDDLString := strings.Join(allDDLs, "\n---\n")
+	// === SOLUSI PAMUNGKAS SELESAI ===
+
 	finalPrompt := fmt.Sprintf(`
 Anda adalah ahli SQL PostgreSQL. Tanggal hari ini (CURRENT_DATE) adalah %s.
 
-Diberikan beberapa CONTOH DDL dan SQL yang paling relevan dengan pertanyaan user (dalam skema "bpr_supra"):
+== KAMUS DATABASE (SEMUA DDL) ==
+Berikut adalah DDL LENGKAP untuk skema "bpr_supra". JANGAN halusinasi kolom/tabel di luar ini:
+%s
+
+== CONTOH SQL (PALING RELEVAN) ==
+Berikut adalah CONTOH SQL yang relevan dengan pertanyaan user:
 %s
 
 Tugas Anda:
-1. Jawab pertanyaan pengguna di bawah ini dengan menulis SATU query SQL PostgreSQL yang valid.
-2. JANGAN pakai markdown (sql). JANGAN tambahkan penjelasan. Hanya SQL.
-3. Untuk pencarian teks atau nama, WAJIB gunakan 'ILIKE' dengan pola '%'.
+1. Berdasarkan "KAMUS DATABASE" di atas, jawab pertanyaan pengguna.
+2. Gunakan "CONTOH SQL" sebagai inspirasi pola.
+3. JANGAN pakai markdown (sql). JANGAN tambahkan penjelasan. Hanya SQL.
+4. JANGAN PERNAH menggunakan SELECT *; selalu sebutkan nama kolomnya.
 
 Pertanyaan Pengguna: "%s"
 
-Query SQL:`, time.Now().Format("2006-01-02"), contextBuilder.String(), userPrompt)
-
+Query SQL:`,
+		time.Now().Format("2006-01-02"),
+		allDDLString, // <-- KAMUS LENGKAP
+		sqlContext,   // <-- CONTOH RELEVAN
+		userPrompt,
+	)
 	groqReqBody := GroqRequest{
-		Model:    "openai/gpt-oss-120b",
+		Model:    "llama-3.1-8b-instant",
 		Messages: []GroqMessage{{Role: "user", Content: finalPrompt}},
 	}
 
