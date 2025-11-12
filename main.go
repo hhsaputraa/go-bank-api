@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-	// mainTrain()
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Peringatan: Tidak bisa memuat file .env")
@@ -21,9 +20,9 @@ func main() {
 		log.Fatalf("Fatal Error: Gagal koneksi ke database. %v", err)
 	}
 
-	if err := LoadCache(); err != nil {
-		log.Printf("PERINGATAN: Gagal memuat cache: %v", err)
-	}
+	// if err := LoadCache(); err != nil {
+	// 	log.Printf("PERINGATAN: Gagal memuat cache: %v", err)
+	// }
 
 	if err := InitVectorService(); err != nil {
 		log.Fatalf("Fatal Error: Gagal koneksi ke Qdrant (Database Vektor): %v", err)

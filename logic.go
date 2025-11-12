@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -17,53 +14,8 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-const CACHE_FILE = "cache.json"
-
-var queryCache = make(map[string]string)
-
-var cacheMutex = &sync.RWMutex{}
-
-func LoadCache() error {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	file, err := os.ReadFile(CACHE_FILE)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("File cache.json tidak ditemukan, cache baru akan dibuat.")
-			queryCache = make(map[string]string)
-			return nil
-		}
-		return err
-	}
-
-	err = json.Unmarshal(file, &queryCache)
-	if err != nil {
-		log.Printf("PERINGATAN: Gagal parse cache.json, cache baru akan dibuat. Error: %v", err)
-		queryCache = make(map[string]string)
-	}
-	return nil
-}
-
-func saveCache() error {
-	file, err := json.MarshalIndent(queryCache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(CACHE_FILE, file, 0644)
-}
-
 func GetSQL(userPrompt string) (string, error) {
-	cacheMutex.RLock()
-	sql, found := queryCache[userPrompt]
-	cacheMutex.RUnlock()
-
-	if found {
-		log.Println("CACHE HIT! Menggunakan SQL dari cache.json.")
-		return sql, nil
-	}
-
-	log.Println("CACHE MISS. Memanggil Groq AI...")
+	log.Println("Memanggil AI Service (dengan semantic cache)...")
 	newSQL, err := getSQLFromAI_Groq(userPrompt)
 	if err != nil {
 		return "", err
@@ -71,16 +23,6 @@ func GetSQL(userPrompt string) (string, error) {
 	if newSQL == "" {
 		return "", errors.New("AI tidak mengembalikan query")
 	}
-
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	queryCache[userPrompt] = newSQL
-
-	if err := saveCache(); err != nil {
-		log.Printf("PERINGATAN: Gagal menyimpan cache ke file: %v", err)
-	}
-
 	return newSQL, nil
 }
 

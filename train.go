@@ -1,135 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
 )
-
-const (
-	QDRANT_COLLECTION_NAME = "bpr_supra_rag"
-	EMBEDDING_MODEL        = "models/text-embedding-004"
-)
-
-type qdrantCreateCollectionReq struct {
-	Vectors qdrantVectors `json:"vectors"`
-}
-
-type qdrantVectors struct {
-	Size     int    `json:"size"`
-	Distance string `json:"distance"`
-}
-
-type qdrantUpsertPointsReq struct {
-	Points []qdrantPoint `json:"points"`
-}
-
-type qdrantPoint struct {
-	ID      string                 `json:"id"`               // string UUID
-	Vector  []float32              `json:"vector,omitempty"` // satu vektor
-	Vectors map[string][]float32   `json:"vectors,omitempty"`
-	Payload map[string]interface{} `json:"payload,omitempty"`
-}
-
-func getQdrantBaseURL() string {
-	if err := godotenv.Load(); err == nil {
-	}
-	base := os.Getenv("QDRANT_URL")
-	if base == "" {
-		base = "http://localhost:6333"
-	}
-	return base
-}
-
-func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Response, []byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, nil, fmt.Errorf("gagal marshal JSON: %w", err)
-		}
-		reqBody = bytes.NewReader(b)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, nil, fmt.Errorf("gagal buat request: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("gagal call %s %s: %w", method, url, err)
-	}
-	defer func() {
-		// kita baca body di bawah; jadi defer close di sini tidak menutup sebelum dibaca.
-	}()
-
-	respBody, readErr := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if readErr != nil {
-		return resp, nil, fmt.Errorf("gagal baca response body: %w", readErr)
-	}
-	return resp, respBody, nil
-}
-
-func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
-	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
-	resp, body, err := httpDoJSON(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
-	return fmt.Errorf("delete collection status %d: %s", resp.StatusCode, string(body))
-}
-
-func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int, distance string) error {
-	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
-	req := qdrantCreateCollectionReq{
-		Vectors: qdrantVectors{
-			Size:     size,
-			Distance: distance, // "Cosine"
-		},
-	}
-	resp, body, err := httpDoJSON(ctx, http.MethodPut, url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("create collection status %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-func qdrantUpsertPoints(ctx context.Context, baseURL, name string, points []qdrantPoint) error {
-	url := fmt.Sprintf("%s/collections/%s/points?wait=true", baseURL, name)
-
-	req := qdrantUpsertPointsReq{Points: points}
-
-	resp, body, err := httpDoJSON(ctx, http.MethodPut, url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("upsert points status %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
 
 func mainTrain() {
 	log.Println("Memulai proses 'Training' Database Vektor...")
@@ -160,9 +40,6 @@ func mainTrain() {
 	log.Println("Koneksi 'Penerjemah' (Google AI)... OK.")
 
 	log.Printf("Menghapus koleksi lama '%s' (jika ada)...", QDRANT_COLLECTION_NAME)
-	if err := qdrantDeleteCollection(ctx, qdrantBase, QDRANT_COLLECTION_NAME); err != nil {
-		log.Printf("Peringatan: Gagal hapus koleksi lama (mungkin belum ada): %v", err)
-	}
 
 	log.Printf("Membuat koleksi baru '%s'...", QDRANT_COLLECTION_NAME)
 	const vectorSize = 768
