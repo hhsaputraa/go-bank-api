@@ -101,15 +101,22 @@ func GetDynamicSqlExamples() ([]string, error) {
 		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
 	}
 
-	query := `
+	// Get schema name dynamically from connection string
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return nil, fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
+	}
+
+	query := fmt.Sprintf(`
 	SELECT
 		prompt_example,
 		sql_example
 	FROM
-		bpr_supra.rag_sql_examples
+		%s.rag_sql_examples
 	ORDER BY
 		id;
-	`
+	`, schema)
+
 	rows, err := DbInstance.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
@@ -141,19 +148,25 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 		return fmt.Errorf("koneksi database (DbInstance) belum siap")
 	}
 
+	// Get schema name dynamically from connection string
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
+	}
+
 	promptExample := fmt.Sprintf("-- Pertanyaan: \"%s\"", promptAsli)
 
-	query := `
-	INSERT INTO bpr_supra.rag_sql_examples 
-		(prompt_example, sql_example) 
-	VALUES 
+	query := fmt.Sprintf(`
+	INSERT INTO %s.rag_sql_examples
+		(prompt_example, sql_example)
+	VALUES
 		($1, $2)
-	`
+	`, schema)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
+	_, err = DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
 	if err != nil {
 		return fmt.Errorf("gagal insert contekan baru ke DB: %w", err)
 	}

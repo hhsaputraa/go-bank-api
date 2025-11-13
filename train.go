@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
@@ -14,36 +13,39 @@ import (
 func mainTrain() {
 	log.Println("Memulai proses 'Training' Database Vektor...")
 
+	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("Error memuat .env: %v", err)
 	}
-	googleApiKey := os.Getenv("GOOGLE_API_KEY")
-	if googleApiKey == "" {
-		log.Fatal("GOOGLE_API_KEY tidak ditemukan di .env")
-	}
 
-	qdrantBase := getQdrantBaseURL()
+	// Load configuration
+	_, err := LoadConfig()
+	if err != nil {
+		log.Fatalf("Error memuat konfigurasi: %v", err)
+	}
+	log.Println("✅ Konfigurasi berhasil dimuat")
 
 	ctx := context.Background()
 
+	// Connect to database
 	if err := ConnectDB(); err != nil {
 		log.Fatalf("Gagal koneksi ke DB Postgres: %v", err)
 	}
 	log.Println("Koneksi DB Postgres untuk baca skema... OK.")
 
-	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(googleApiKey))
+	// Initialize Google AI client for embeddings
+	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(AppConfig.GoogleAPIKey))
 	if err != nil {
 		log.Fatalf("Gagal membuat client Gemini: %v", err)
 	}
 	defer geminiClient.Close()
-	embedder := geminiClient.EmbeddingModel(EMBEDDING_MODEL)
-	log.Println("Koneksi 'Penerjemah' (Google AI)... OK.")
+	embedder := geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
+	log.Printf("Koneksi 'Penerjemah' (Google AI)... OK. Model: %s", AppConfig.EmbeddingModel)
 
-	log.Printf("Menghapus koleksi lama '%s' (jika ada)...", QDRANT_COLLECTION_NAME)
-
-	log.Printf("Membuat koleksi baru '%s'...", QDRANT_COLLECTION_NAME)
-	const vectorSize = 768
-	if err := qdrantCreateCollection(ctx, qdrantBase, QDRANT_COLLECTION_NAME, vectorSize, "Cosine"); err != nil {
+	// Create/recreate Qdrant collection
+	log.Printf("Membuat koleksi baru '%s'...", AppConfig.QdrantCollectionName)
+	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
+		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
 		log.Fatalf("Gagal membuat koleksi di Qdrant: %v", err)
 	}
 
@@ -93,12 +95,12 @@ func mainTrain() {
 	if len(points) == 0 {
 		log.Println("Tidak ada point untuk di-upsert (semua gagal embed?).")
 	} else {
-		if err := qdrantUpsertPoints(ctx, qdrantBase, QDRANT_COLLECTION_NAME, points); err != nil {
+		if err := qdrantUpsertPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, points); err != nil {
 			log.Fatalf("Gagal menyimpan vektor ke Qdrant: %v", err)
 		}
 	}
 
 	log.Println("-----------------------------------------------")
-	log.Printf("✅ 'Training' selesai! Database Vektor '%s' sudah terisi (Dinamis).", QDRANT_COLLECTION_NAME)
+	log.Printf("✅ 'Training' selesai! Database Vektor '%s' sudah terisi (Dinamis).", AppConfig.QdrantCollectionName)
 	log.Println("-----------------------------------------------")
 }

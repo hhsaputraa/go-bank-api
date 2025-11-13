@@ -108,10 +108,15 @@ func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {
 }
 
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
-
 	var result QueryResult
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Use timeout from config, fallback to 10 seconds if config not loaded
+	timeout := 10 * time.Second
+	if AppConfig != nil {
+		timeout = AppConfig.QueryTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	rows, err := DbInstance.QueryContext(ctx, query, params...)

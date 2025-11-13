@@ -23,34 +23,40 @@ var qdrantClient *pb.Client
 var geminiEmbedder *genai.EmbeddingModel
 
 func InitVectorService() error {
+	if AppConfig == nil {
+		return fmt.Errorf("konfigurasi aplikasi belum dimuat")
+	}
+
 	ctx := context.Background()
 
-	googleApiKey := os.Getenv("GOOGLE_API_KEY")
-
-	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(googleApiKey))
+	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(AppConfig.GoogleAPIKey))
 	if err != nil {
 		return fmt.Errorf("gagal membuat client Gemini: %w", err)
 	}
-	geminiEmbedder = geminiClient.EmbeddingModel(EMBEDDING_MODEL)
+	geminiEmbedder = geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
 
 	client, err := pb.NewClient(&pb.Config{
-		Host: "localhost",
-		Port: 6334,
+		Host: AppConfig.QdrantGRPCHost,
+		Port: AppConfig.QdrantGRPCPort,
 	})
 	if err != nil {
 		return fmt.Errorf("gagal membuat Qdrant gRPC client: %w", err)
 	}
 	qdrantClient = client
 
-	qdrantBase := getQdrantBaseURL()
-	log.Printf("Memastikan collection cache '%s' ada via REST...", QDRANT_CACHE_COLLECTION)
-	const vectorSize = 768
+	log.Printf("Memastikan collection cache '%s' ada via REST...", AppConfig.QdrantCacheCollection)
 
-	if err := qdrantCreateCollection(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, vectorSize, "Cosine"); err != nil {
+	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection,
+		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
 
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
+	log.Printf("   - Embedding Model: %s", AppConfig.EmbeddingModel)
+	log.Printf("   - Qdrant gRPC: %s:%d", AppConfig.QdrantGRPCHost, AppConfig.QdrantGRPCPort)
+	log.Printf("   - Qdrant REST: %s", AppConfig.QdrantURL)
+	log.Printf("   - RAG Collection: %s", AppConfig.QdrantCollectionName)
+	log.Printf("   - Cache Collection: %s", AppConfig.QdrantCacheCollection)
 	return nil
 }
 
@@ -69,10 +75,11 @@ type GroqResponse struct {
 }
 
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
+	if AppConfig == nil {
+		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
+	}
 
-	apiKey := os.Getenv("GROQ_API_KEY")
 	ctx := context.Background()
-	qdrantBase := getQdrantBaseURL()
 
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(userPrompt))
@@ -82,16 +89,14 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	promptVector := res.Embedding.Values
 
 	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
-	var cacheSearchLimit uint64 = 1
-	var cacheThreshold float32 = 0.95
 
 	searchReq := qdrantSearchReq{
 		Vector:      promptVector,
-		Limit:       cacheSearchLimit,
+		Limit:       AppConfig.CacheSearchLimit,
 		WithPayload: true,
 	}
 
-	cacheResponse, err := qdrantSearchPoints(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, searchReq)
+	cacheResponse, err := qdrantSearchPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, searchReq)
 	if err != nil {
 		log.Printf("PERINGATAN: Gagal mencari di cache Qdrant: %v", err)
 	}
@@ -100,30 +105,28 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 		cachedPoint := cacheResponse.Result[0]
 		topScore := cachedPoint.Score
 
-		if topScore >= cacheThreshold {
+		if topScore >= AppConfig.CacheSimilarityThreshold {
 			if cachedSql, ok := cachedPoint.Payload["sql_query"]; ok {
-				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f (Melebihi Threshold: %f)", topScore, cacheThreshold)
+				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f (Melebihi Threshold: %f)", topScore, AppConfig.CacheSimilarityThreshold)
 				return AISqlResponse{SQL: cachedSql.(string), IsCached: true}, nil
 			} else {
 				log.Printf("CACHE MISS. Ditemukan item cache (Skor: %f) tapi payload 'sql_query' hilang.", topScore)
 			}
 		} else {
-			log.Printf("CACHE MISS. Skor tertinggi: %f (Dibawah Threshold: %f)", topScore, cacheThreshold)
+			log.Printf("CACHE MISS. Skor tertinggi: %f (Dibawah Threshold: %f)", topScore, AppConfig.CacheSimilarityThreshold)
 		}
 	} else {
 		log.Println("CACHE MISS. Tidak ada item cache yang cocok ditemukan.")
 	}
 
 	log.Println("Memanggil RAG (gRPC) + Groq AI...")
-
 	log.Println("Mencari konteks relevan di Qdrant (RAG)...")
-	var searchLimit uint64 = 7
 
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
-		CollectionName: QDRANT_COLLECTION_NAME,
+		CollectionName: AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
-		Limit:          &searchLimit,
+		Limit:          &AppConfig.RAGSearchLimit,
 	})
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
@@ -179,20 +182,20 @@ Query SQL:`,
 	)
 
 	groqReqBody := GroqRequest{
-		Model:    "llama-3.1-8b-instant",
+		Model:    AppConfig.GroqModel,
 		Messages: []GroqMessage{{Role: "user", Content: finalPrompt}},
 	}
 	jsonBody, err := json.Marshal(groqReqBody)
 	if err != nil {
 		return AISqlResponse{}, err
 	}
-	req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return AISqlResponse{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: AppConfig.GroqTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return AISqlResponse{}, err
@@ -225,12 +228,6 @@ Query SQL:`,
 	}, nil
 }
 
-const (
-	QDRANT_COLLECTION_NAME  = "bpr_supra_rag"
-	EMBEDDING_MODEL         = "models/text-embedding-004"
-	QDRANT_CACHE_COLLECTION = "bpr_supra_cache"
-)
-
 type qdrantCreateCollectionReq struct {
 	Vectors qdrantVectors `json:"vectors"`
 }
@@ -248,7 +245,12 @@ type qdrantPoint struct {
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
+// getQdrantBaseURL is deprecated - use AppConfig.QdrantURL instead
+// Kept for backward compatibility
 func getQdrantBaseURL() string {
+	if AppConfig != nil {
+		return AppConfig.QdrantURL
+	}
 	base := os.Getenv("QDRANT_URL")
 	if base == "" {
 		base = "http://localhost:6333"
@@ -273,7 +275,12 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
+
+	timeout := 60 * time.Second
+	if AppConfig != nil {
+		timeout = AppConfig.QdrantTimeout
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("gagal call %s %s: %w", method, url, err)
@@ -370,8 +377,12 @@ func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSea
 
 func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 	go func() {
+		if AppConfig == nil {
+			log.Println("PERINGATAN: Konfigurasi belum dimuat, tidak bisa menyimpan ke cache")
+			return
+		}
+
 		ctx := context.Background()
-		qdrantBase := getQdrantBaseURL()
 
 		log.Println("Menyimpan hasil (yang sudah tervalidasi) ke Semantic Cache (REST)...")
 
@@ -384,7 +395,7 @@ func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 			},
 		}
 
-		err := qdrantUpsertPoints(ctx, qdrantBase, QDRANT_CACHE_COLLECTION, []qdrantPoint{newPoint})
+		err := qdrantUpsertPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{newPoint})
 		if err != nil {
 			log.Printf("PERINGATAN: Gagal menyimpan ke cache Qdrant: %v", err)
 		} else {
