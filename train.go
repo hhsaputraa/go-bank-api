@@ -61,20 +61,14 @@ func mainTrain() {
 		log.Fatalf("Gagal mengambil contoh SQL dinamis: %v", err)
 	}
 
-	allContekan := append(dynamicDDLs, dynamicSQLExamples...)
+	var points []qdrantPoint
 
-	log.Printf("Total %d potongan konteks (DDL + Contoh SQL) akan di-embed.", len(allContekan))
-
-	points := make([]qdrantPoint, 0, len(allContekan))
-
-	for i, contekan := range allContekan {
-		res, err := embedder.EmbedContent(ctx, genai.Text(contekan))
+	// A. PROSES DDL (Label: "ddl")
+	log.Printf("Memproses %d DDL...", len(dynamicDDLs))
+	for i, content := range dynamicDDLs {
+		res, err := embedder.EmbedContent(ctx, genai.Text(content))
 		if err != nil {
-			log.Printf("PERINGATAN: Gagal embed contekan #%d, dilewati. Error: %v", i, err)
-			continue
-		}
-		if res == nil || res.Embedding == nil || len(res.Embedding.Values) == 0 {
-			log.Printf("PERINGATAN: Embedding kosong untuk contekan #%d, dilewati.", i)
+			log.Printf("Skip DDL #%d: %v", i, err)
 			continue
 		}
 
@@ -82,13 +76,31 @@ func mainTrain() {
 			ID:     uuid.NewString(),
 			Vector: res.Embedding.Values,
 			Payload: map[string]interface{}{
-				"content": contekan,
+				"content":  content,
+				"category": "ddl",
 			},
 		}
 		points = append(points, point)
-		if (i+1)%50 == 0 {
-			log.Printf("Progress embed: %d/%d", i+1, len(allContekan))
+	}
+
+	// B. PROSES SQL EXAMPLES (Label: "sql")
+	log.Printf("Memproses %d Contoh SQL...", len(dynamicSQLExamples))
+	for i, content := range dynamicSQLExamples {
+		res, err := embedder.EmbedContent(ctx, genai.Text(content))
+		if err != nil {
+			log.Printf("Skip SQL #%d: %v", i, err)
+			continue
 		}
+
+		point := qdrantPoint{
+			ID:     uuid.NewString(),
+			Vector: res.Embedding.Values,
+			Payload: map[string]interface{}{
+				"content":  content,
+				"category": "sql",
+			},
+		}
+		points = append(points, point)
 	}
 
 	log.Println("Menyimpan semua vektor ke Qdrant via REST...")

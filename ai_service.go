@@ -122,11 +122,29 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	log.Println("Memanggil RAG (gRPC) + Groq AI...")
 	log.Println("Mencari konteks relevan di Qdrant (RAG)...")
 
+	var searchLimit uint64 = 10
+
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
-		Limit:          &AppConfig.RAGSearchLimit,
+		Limit:          &searchLimit,
+		Filter: &pb.Filter{
+			Must: []*pb.Condition{
+				{
+					ConditionOneOf: &pb.Condition_Field{
+						Field: &pb.FieldCondition{
+							Key: "category",
+							Match: &pb.Match{
+								MatchValue: &pb.Match_Keyword{
+									Keyword: "sql",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	})
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
@@ -240,13 +258,13 @@ type qdrantUpsertPointsReq struct {
 }
 
 type qdrantPoint struct {
-	ID      string                 `json:"id"`     // string UUID
-	Vector  []float32              `json:"vector"` // BUKAN omitempty
+	ID      string                 `json:"id"`
+	Vector  []float32              `json:"vector"`
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
 // getQdrantBaseURL is deprecated - use AppConfig.QdrantURL instead
-// Kept for backward compatibility
+
 func getQdrantBaseURL() string {
 	if AppConfig != nil {
 		return AppConfig.QdrantURL
@@ -286,7 +304,7 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 		return nil, nil, fmt.Errorf("gagal call %s %s: %w", method, url, err)
 	}
 	defer func() {
-		// kita baca body di bawah; jadi defer close di sini tidak menutup sebelum dibaca.
+
 	}()
 
 	respBody, readErr := io.ReadAll(resp.Body)

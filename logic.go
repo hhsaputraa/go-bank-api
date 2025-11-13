@@ -110,7 +110,6 @@ func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
 	var result QueryResult
 
-	// Use timeout from config, fallback to 10 seconds if config not loaded
 	timeout := 10 * time.Second
 	if AppConfig != nil {
 		timeout = AppConfig.QueryTimeout

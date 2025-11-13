@@ -10,31 +10,31 @@ import (
 // Config holds all application configuration
 type Config struct {
 	// Database
-	DBConnString            string
-	DBMaxOpenConns          int
-	DBMaxIdleConns          int
-	DBConnMaxLifetime       time.Duration
-	DBPingTimeout           time.Duration
+	DBConnString      string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
+	DBPingTimeout     time.Duration
 
 	// Groq AI
-	GroqAPIKey     string
-	GroqModel      string
-	GroqAPIURL     string
-	GroqTimeout    time.Duration
+	GroqAPIKey  string
+	GroqModel   string
+	GroqAPIURL  string
+	GroqTimeout time.Duration
 
 	// Google AI
-	GoogleAPIKey         string
-	EmbeddingModel       string
-	EmbeddingVectorSize  int
+	GoogleAPIKey        string
+	EmbeddingModel      string
+	EmbeddingVectorSize int
 
 	// Qdrant
-	QdrantGRPCHost       string
-	QdrantGRPCPort       int
-	QdrantURL            string
-	QdrantCollectionName string
+	QdrantGRPCHost        string
+	QdrantGRPCPort        int
+	QdrantURL             string
+	QdrantCollectionName  string
 	QdrantCacheCollection string
-	QdrantDistanceMetric string
-	QdrantTimeout        time.Duration
+	QdrantDistanceMetric  string
+	QdrantTimeout         time.Duration
 
 	// Cache
 	CacheSimilarityThreshold float32
@@ -57,7 +57,6 @@ type Config struct {
 
 var AppConfig *Config
 
-// LoadConfig loads configuration from environment variables
 func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		// Database
@@ -166,4 +165,3 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 	}
 	return value
 }
-
