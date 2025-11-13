@@ -25,11 +25,17 @@ func ConnectDB() error {
 		return fmt.Errorf("gagal membuka koneksi database: %w", err)
 	}
 
-	DbInstance.SetMaxOpenConns(25)
-	DbInstance.SetMaxIdleConns(10)
-	DbInstance.SetConnMaxLifetime(5 * time.Minute)
+	// Konfigurasi connection pool dari environment variables
+	maxOpenConns := GetEnvAsInt("DB_MAX_OPEN_CONNS", 25)
+	maxIdleConns := GetEnvAsInt("DB_MAX_IDLE_CONNS", 10)
+	connMaxLifetime := GetEnvAsDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute)
+	connTimeout := GetEnvAsDuration("DB_CONN_TIMEOUT", 5*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	DbInstance.SetMaxOpenConns(maxOpenConns)
+	DbInstance.SetMaxIdleConns(maxIdleConns)
+	DbInstance.SetConnMaxLifetime(connMaxLifetime)
+
+	ctx, cancel := context.WithTimeout(context.Background(), connTimeout)
 	defer cancel()
 
 	err = DbInstance.PingContext(ctx)

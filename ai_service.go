@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
+	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/api/option"
 )
@@ -29,20 +30,37 @@ func InitVectorService() error {
 		return errors.New("GOOGLE_API_KEY tidak ditemukan di .env")
 	}
 
+	// Baca embedding model dari environment variable
+	embeddingModel := GetEnv("EMBEDDING_MODEL", "models/text-embedding-004")
+
 	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(googleApiKey))
 	if err != nil {
 		return fmt.Errorf("gagal membuat client Gemini: %w", err)
 	}
-	geminiEmbedder = geminiClient.EmbeddingModel(EMBEDDING_MODEL) // EMBEDDING_MODEL dari train.go
+	geminiEmbedder = geminiClient.EmbeddingModel(embeddingModel)
+
+	// Baca konfigurasi Qdrant dari environment variables
+	qdrantHost := GetEnv("QDRANT_HOST", "localhost")
+	qdrantPort := GetEnvAsInt("QDRANT_PORT", 6334)
 
 	client, err := pb.NewClient(&pb.Config{
-		Host: "localhost",
-		Port: 6334,
+		Host: qdrantHost,
+		Port: qdrantPort,
 	})
 	if err != nil {
 		return fmt.Errorf("gagal membuat Qdrant client: %w", err)
 	}
 	qdrantClient = client
+
+	// Buat collection cache semantik jika belum ada
+	qdrantBase := getQdrantBaseURL()
+	cacheCollectionName := GetEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache")
+	vectorSize := GetEnvAsInt("EMBEDDING_VECTOR_SIZE", 768)
+
+	log.Printf("Memastikan collection cache '%s' ada via REST...", cacheCollectionName)
+	if err := qdrantCreateCollection(ctx, qdrantBase, cacheCollectionName, vectorSize, "Cosine"); err != nil {
+		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
+	}
 
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
 	return nil
@@ -69,6 +87,8 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 		return "", errors.New("GROQ_API_KEY tidak ditemukan di environment")
 	}
 	ctx := context.Background()
+	qdrantBase := getQdrantBaseURL()
+
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(userPrompt))
 	if err != nil {
@@ -76,11 +96,51 @@ func getSQLFromAI_Groq(userPrompt string) (string, error) {
 	}
 	promptVector := res.Embedding.Values
 
-	log.Println("Mencari konteks relevan di Qdrant...")
-	var searchLimit uint64 = 7
+	// === SEMANTIC CACHE CHECK ===
+	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
+	cacheCollectionName := GetEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache")
+	cacheThreshold := float32(0.95) // Bisa dijadikan env variable jika perlu
+
+	var cacheSearchLimit uint64 = 1
+	searchReq := qdrantSearchReq{
+		Vector:      promptVector,
+		Limit:       cacheSearchLimit,
+		WithPayload: true,
+	}
+
+	cacheResponse, err := qdrantSearchPoints(ctx, qdrantBase, cacheCollectionName, searchReq)
+	if err != nil {
+		log.Printf("PERINGATAN: Gagal mencari di cache Qdrant: %v", err)
+	}
+
+	if len(cacheResponse.Result) > 0 {
+		cachedPoint := cacheResponse.Result[0]
+		topScore := cachedPoint.Score
+
+		if topScore >= cacheThreshold {
+			if cachedSql, ok := cachedPoint.Payload["sql_query"]; ok {
+				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f (Melebihi Threshold: %f)", topScore, cacheThreshold)
+				return cachedSql.(string), nil
+			} else {
+				log.Printf("CACHE MISS. Ditemukan item cache (Skor: %f) tapi payload 'sql_query' hilang.", topScore)
+			}
+		} else {
+			log.Printf("CACHE MISS. Skor tertinggi: %f (Dibawah Threshold: %f)", topScore, cacheThreshold)
+		}
+	} else {
+		log.Println("CACHE MISS. Tidak ada item cache yang cocok ditemukan.")
+	}
+	// === END SEMANTIC CACHE CHECK ===
+
+	log.Println("Memanggil RAG (gRPC) + Groq AI...")
+	log.Println("Mencari konteks relevan di Qdrant (RAG)...")
+
+	// Baca konfigurasi dari environment variables
+	qdrantCollectionName := GetEnv("QDRANT_COLLECTION_NAME", "bpr_supra_rag")
+	searchLimit := GetEnvAsUint64("QDRANT_SEARCH_LIMIT", 7)
 
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
-		CollectionName: QDRANT_COLLECTION_NAME,
+		CollectionName: qdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
 		Limit:          &searchLimit,
@@ -152,8 +212,13 @@ Query SQL:`,
 		sqlContext,   // <-- CONTOH RELEVAN
 		userPrompt,
 	)
+	// Baca konfigurasi Groq dari environment variables
+	groqModel := GetEnv("GROQ_MODEL", "llama-3.1-8b-instant")
+	groqApiUrl := GetEnv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
+	groqTimeout := GetEnvAsDuration("GROQ_TIMEOUT", 30*time.Second)
+
 	groqReqBody := GroqRequest{
-		Model:    "llama-3.1-8b-instant",
+		Model:    groqModel,
 		Messages: []GroqMessage{{Role: "user", Content: finalPrompt}},
 	}
 
@@ -162,14 +227,14 @@ Query SQL:`,
 		return "", err
 	}
 
-	req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", groqApiUrl, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: groqTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -197,5 +262,34 @@ Query SQL:`,
 	sqlQuery = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(sqlQuery, "```sql"), "```"))
 
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
+
+	// Simpan ke semantic cache (async)
+	go SaveToCache(userPrompt, promptVector, sqlQuery)
+
 	return sqlQuery, nil
+}
+
+// SaveToCache - Menyimpan hasil query yang sudah tervalidasi ke semantic cache
+func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
+	ctx := context.Background()
+	qdrantBase := getQdrantBaseURL()
+	cacheCollectionName := GetEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache")
+
+	log.Println("Menyimpan hasil (yang sudah tervalidasi) ke Semantic Cache (REST)...")
+
+	newPoint := qdrantPoint{
+		ID:     uuid.NewString(),
+		Vector: promptVector,
+		Payload: map[string]interface{}{
+			"prompt_asli": promptAsli,
+			"sql_query":   sqlQuery,
+		},
+	}
+
+	err := qdrantUpsertPoints(ctx, qdrantBase, cacheCollectionName, []qdrantPoint{newPoint})
+	if err != nil {
+		log.Printf("PERINGATAN: Gagal menyimpan ke cache Qdrant: %v", err)
+	} else {
+		log.Println("✅ Berhasil menyimpan ke semantic cache.")
+	}
 }

@@ -17,8 +17,6 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-const CACHE_FILE = "cache.json"
-
 var queryCache = make(map[string]string)
 
 var cacheMutex = &sync.RWMutex{}
@@ -27,10 +25,13 @@ func LoadCache() error {
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
 
-	file, err := os.ReadFile(CACHE_FILE)
+	// Baca nama file cache dari environment variable
+	cacheFile := GetEnv("CACHE_FILE", "cache.json")
+
+	file, err := os.ReadFile(cacheFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Println("File cache.json tidak ditemukan, cache baru akan dibuat.")
+			log.Printf("File %s tidak ditemukan, cache baru akan dibuat.", cacheFile)
 			queryCache = make(map[string]string)
 			return nil
 		}
@@ -39,18 +40,21 @@ func LoadCache() error {
 
 	err = json.Unmarshal(file, &queryCache)
 	if err != nil {
-		log.Printf("PERINGATAN: Gagal parse cache.json, cache baru akan dibuat. Error: %v", err)
+		log.Printf("PERINGATAN: Gagal parse %s, cache baru akan dibuat. Error: %v", cacheFile, err)
 		queryCache = make(map[string]string)
 	}
 	return nil
 }
 
 func saveCache() error {
+	// Baca nama file cache dari environment variable
+	cacheFile := GetEnv("CACHE_FILE", "cache.json")
+
 	file, err := json.MarshalIndent(queryCache, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(CACHE_FILE, file, 0644)
+	return os.WriteFile(cacheFile, file, 0644)
 }
 
 func GetSQL(userPrompt string) (string, error) {

@@ -100,15 +100,19 @@ func GetDynamicSqlExamples() ([]string, error) {
 		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
 	}
 
-	query := `
+	// Baca nama tabel dari environment variable (untuk fleksibilitas schema)
+	tableName := GetEnv("FEEDBACK_TABLE_NAME", "bpr_supra.rag_sql_examples")
+
+	query := fmt.Sprintf(`
 	SELECT
 		prompt_example,
 		sql_example
 	FROM
-		bpr_supra.rag_sql_examples
+		%s
 	ORDER BY
-		id;
-	`
+		id
+	`, tableName)
+
 	rows, err := DbInstance.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
@@ -133,4 +137,27 @@ func GetDynamicSqlExamples() ([]string, error) {
 		log.Printf("✅ Berhasil! mengambil %d contoh SQL dinamis.", len(contexts))
 	}
 	return contexts, nil
+}
+
+// SaveFeedbackToDatabase - Menyimpan feedback koreksi SQL dari user ke database
+func SaveFeedbackToDatabase(promptAsli, sqlKoreksi string) error {
+	if DbInstance == nil {
+		return fmt.Errorf("koneksi database (DbInstance) belum siap")
+	}
+
+	// Baca nama tabel dari environment variable (untuk fleksibilitas schema)
+	tableName := GetEnv("FEEDBACK_TABLE_NAME", "bpr_supra.rag_sql_examples")
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (prompt_example, sql_example, created_at)
+		VALUES ($1, $2, NOW())
+	`, tableName)
+
+	_, err := DbInstance.ExecContext(context.Background(), query, promptAsli, sqlKoreksi)
+	if err != nil {
+		return fmt.Errorf("gagal menyimpan feedback ke tabel %s: %w", tableName, err)
+	}
+
+	log.Printf("✅ Feedback berhasil disimpan ke tabel %s", tableName)
+	return nil
 }
