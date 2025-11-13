@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -17,72 +14,16 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-var queryCache = make(map[string]string)
-
-var cacheMutex = &sync.RWMutex{}
-
-func LoadCache() error {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	// Baca nama file cache dari environment variable
-	cacheFile := GetEnv("CACHE_FILE", "cache.json")
-
-	file, err := os.ReadFile(cacheFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("File %s tidak ditemukan, cache baru akan dibuat.", cacheFile)
-			queryCache = make(map[string]string)
-			return nil
-		}
-		return err
-	}
-
-	err = json.Unmarshal(file, &queryCache)
-	if err != nil {
-		log.Printf("PERINGATAN: Gagal parse %s, cache baru akan dibuat. Error: %v", cacheFile, err)
-		queryCache = make(map[string]string)
-	}
-	return nil
-}
-
-func saveCache() error {
-	// Baca nama file cache dari environment variable
-	cacheFile := GetEnv("CACHE_FILE", "cache.json")
-
-	file, err := json.MarshalIndent(queryCache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(cacheFile, file, 0644)
-}
-
+// GetSQL - Langsung memanggil AI dengan semantic cache di Qdrant
+// Cache lokal (cache.json) sudah dihapus untuk menghindari gangguan development
 func GetSQL(userPrompt string) (string, error) {
-	cacheMutex.RLock()
-	sql, found := queryCache[userPrompt]
-	cacheMutex.RUnlock()
-
-	if found {
-		log.Println("CACHE HIT! Menggunakan SQL dari cache.json.")
-		return sql, nil
-	}
-
-	log.Println("CACHE MISS. Memanggil Groq AI...")
+	log.Println("Memanggil AI dengan semantic cache Qdrant...")
 	newSQL, err := getSQLFromAI_Groq(userPrompt)
 	if err != nil {
 		return "", err
 	}
 	if newSQL == "" {
 		return "", errors.New("AI tidak mengembalikan query")
-	}
-
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	queryCache[userPrompt] = newSQL
-
-	if err := saveCache(); err != nil {
-		log.Printf("PERINGATAN: Gagal menyimpan cache ke file: %v", err)
 	}
 
 	return newSQL, nil

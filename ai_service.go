@@ -208,11 +208,10 @@ Pertanyaan Pengguna: "%s"
 
 Query SQL:`,
 		time.Now().Format("2006-01-02"),
-		allDDLString, // <-- KAMUS LENGKAP
-		sqlContext,   // <-- CONTOH RELEVAN
+		allDDLString,
+		sqlContext,
 		userPrompt,
 	)
-	// Baca konfigurasi Groq dari environment variables
 	groqModel := GetEnv("GROQ_MODEL", "llama-3.1-8b-instant")
 	groqApiUrl := GetEnv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
 	groqTimeout := GetEnvAsDuration("GROQ_TIMEOUT", 30*time.Second)
@@ -263,19 +262,29 @@ Query SQL:`,
 
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 
-	// Simpan ke semantic cache (async)
-	go SaveToCache(userPrompt, promptVector, sqlQuery)
+	// TIDAK auto-save ke semantic cache untuk mencegah cache poisoning
+	// SQL yang error tidak boleh masuk ke cache
+	// Cache hanya diisi melalui endpoint feedback setelah user validasi hasil benar
 
 	return sqlQuery, nil
 }
 
-// SaveToCache - Menyimpan hasil query yang sudah tervalidasi ke semantic cache
-func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
+// SaveValidatedQueryToCache - Auto-save query yang berhasil dieksekusi ke semantic cache
+// Dipanggil setelah SQL berhasil dieksekusi tanpa error (cache poisoning prevention)
+func SaveValidatedQueryToCache(promptAsli string, sqlQuery string) {
 	ctx := context.Background()
 	qdrantBase := getQdrantBaseURL()
 	cacheCollectionName := GetEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache")
 
-	log.Println("Menyimpan hasil (yang sudah tervalidasi) ke Semantic Cache (REST)...")
+	log.Println("Menyimpan hasil tervalidasi ke Semantic Cache (REST)...")
+
+	// Embed prompt ke vektor
+	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(promptAsli))
+	if err != nil {
+		log.Printf("PERINGATAN: Gagal embed prompt untuk cache: %v", err)
+		return
+	}
+	promptVector := res.Embedding.Values
 
 	newPoint := qdrantPoint{
 		ID:     uuid.NewString(),
@@ -286,10 +295,44 @@ func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 		},
 	}
 
-	err := qdrantUpsertPoints(ctx, qdrantBase, cacheCollectionName, []qdrantPoint{newPoint})
+	err = qdrantUpsertPoints(ctx, qdrantBase, cacheCollectionName, []qdrantPoint{newPoint})
 	if err != nil {
 		log.Printf("PERINGATAN: Gagal menyimpan ke cache Qdrant: %v", err)
 	} else {
 		log.Println("✅ Berhasil menyimpan ke semantic cache.")
+	}
+}
+
+// SaveFeedbackToSemanticCache - Menyimpan feedback yang sudah divalidasi user ke semantic cache
+// Fungsi ini dipanggil dari endpoint feedback setelah user memvalidasi SQL benar
+func SaveFeedbackToSemanticCache(promptAsli string, sqlQuery string) {
+	ctx := context.Background()
+	qdrantBase := getQdrantBaseURL()
+	cacheCollectionName := GetEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache")
+
+	log.Println("Menyimpan feedback tervalidasi ke Semantic Cache (REST)...")
+
+	// Embed prompt ke vektor
+	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(promptAsli))
+	if err != nil {
+		log.Printf("PERINGATAN: Gagal embed prompt untuk cache: %v", err)
+		return
+	}
+	promptVector := res.Embedding.Values
+
+	newPoint := qdrantPoint{
+		ID:     uuid.NewString(),
+		Vector: promptVector,
+		Payload: map[string]interface{}{
+			"prompt_asli": promptAsli,
+			"sql_query":   sqlQuery,
+		},
+	}
+
+	err = qdrantUpsertPoints(ctx, qdrantBase, cacheCollectionName, []qdrantPoint{newPoint})
+	if err != nil {
+		log.Printf("PERINGATAN: Gagal menyimpan feedback ke cache Qdrant: %v", err)
+	} else {
+		log.Println("✅ Berhasil menyimpan feedback ke semantic cache.")
 	}
 }

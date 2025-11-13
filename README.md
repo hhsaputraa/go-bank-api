@@ -7,12 +7,14 @@ API untuk menghasilkan SQL query dari natural language menggunakan RAG (Retrieva
 - **Natural Language to SQL**: Konversi pertanyaan bahasa natural menjadi SQL query
 - **RAG (Retrieval-Augmented Generation)**: Menggunakan vector database untuk meningkatkan akurasi
 - **Semantic Cache**: Cache semantik di Qdrant untuk query yang mirip (threshold 0.95)
-- **3-Level Caching Strategy**:
-  1. **Exact Match Cache** (cache.json) - Untuk prompt yang persis sama
-  2. **Semantic Cache** (Qdrant collection) - Untuk prompt yang mirip secara semantik
-  3. **RAG + AI Generation** - Jika tidak ada di cache
+- **Smart Caching Strategy**:
+  1. **Semantic Cache Check** (Qdrant collection) - Cek similarity dengan threshold 0.95
+  2. **RAG + AI Generation** - Jika tidak ada di cache, generate SQL baru
+  3. **Auto-Save on Success** - SQL otomatis masuk cache setelah berhasil dieksekusi
+  4. **Manual Feedback** - User bisa koreksi SQL via endpoint feedback
 - **Dynamic Schema**: Otomatis membaca schema database dari PostgreSQL
 - **Feedback Loop**: User bisa memberikan koreksi SQL untuk training ulang
+- **Cache Poisoning Prevention**: SQL error tidak masuk cache, hanya SQL yang berhasil dieksekusi
 - **Admin Retrain**: Endpoint untuk retrain vector database
 - **Fully Configurable**: Semua konfigurasi melalui environment variables
 
@@ -100,11 +102,11 @@ postgres://username:password@localhost:5432/database?sslmode=disable&search_path
 
 #### 🎓 Feedback & Training Configuration
 
-| Variable                  | Default                    | Deskripsi                                       |
-| ------------------------- | -------------------------- | ----------------------------------------------- |
-| `FEEDBACK_TABLE_NAME`     | bpr_supra.rag_sql_examples | Nama tabel untuk menyimpan feedback koreksi SQL |
-| `QDRANT_CACHE_COLLECTION` | bpr_supra_cache            | Nama collection Qdrant untuk semantic cache     |
-| `QDRANT_CACHE_THRESHOLD`  | 0.95                       | Threshold untuk semantic cache hit (0.0 - 1.0)  |
+| Variable                  | Default                    | Deskripsi                                                      |
+| ------------------------- | -------------------------- | -------------------------------------------------------------- |
+| `FEEDBACK_TABLE_NAME`     | bpr_supra.rag_sql_examples | Nama tabel untuk menyimpan feedback koreksi SQL                |
+| `QDRANT_CACHE_COLLECTION` | bpr_supra_cache            | Nama collection Qdrant untuk semantic cache                    |
+| `QDRANT_CACHE_THRESHOLD`  | 0.95                       | Threshold untuk semantic cache hit (0.0 - 1.0, semakin strict) |
 
 ## 🏃 Cara Menjalankan
 

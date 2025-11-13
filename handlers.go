@@ -60,9 +60,16 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	data, err := ExecuteDynamicQuery(sqlQuery, nil)
 	if err != nil {
+		// SQL error - TIDAK simpan ke cache (cache poisoning prevention)
+		log.Printf("❌ SQL error, tidak disimpan ke cache: %v", err)
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// ✅ SQL berhasil dieksekusi - Auto-save ke semantic cache
+	log.Println("✅ SQL berhasil dieksekusi, menyimpan ke semantic cache...")
+	go SaveValidatedQueryToCache(normalizedPrompt, sqlQuery)
+
 	respondWithJSON(w, http.StatusOK, data)
 }
 
@@ -102,7 +109,10 @@ func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("✅ Feedback berhasil disimpan ke database")
+	// Simpan ke semantic cache Qdrant (async) - hanya SQL yang sudah divalidasi user
+	go SaveFeedbackToSemanticCache(req.PromptAsli, req.SqlKoreksi)
+
+	log.Println("✅ Feedback berhasil disimpan ke database dan semantic cache")
 	respondWithJSON(w, http.StatusOK, map[string]string{
 		"message": "Feedback berhasil disimpan. Terima kasih!",
 	})
