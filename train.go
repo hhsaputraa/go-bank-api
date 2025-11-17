@@ -15,13 +15,13 @@ func mainTrain() {
 
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Fatalf("Error memuat .env: %v", err)
+		log.Fatalf("⚠️Error memuat .env: %v", err)
 	}
 
 	// Load configuration
 	_, err := LoadConfig()
 	if err != nil {
-		log.Fatalf("Error memuat konfigurasi: %v", err)
+		log.Fatalf("⚠️Error memuat konfigurasi: %v", err)
 	}
 	log.Println("✅ Konfigurasi berhasil dimuat")
 
@@ -29,7 +29,7 @@ func mainTrain() {
 
 	// Connect to database
 	if err := ConnectDB(); err != nil {
-		log.Fatalf("Gagal koneksi ke DB Postgres: %v", err)
+		log.Fatalf("⚠️Gagal koneksi ke DB Postgres: %v", err)
 	}
 	log.Println("Koneksi DB Postgres untuk baca skema... OK.")
 

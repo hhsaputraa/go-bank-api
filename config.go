@@ -68,8 +68,8 @@ func LoadConfig() (*Config, error) {
 
 		// Groq AI
 		GroqAPIKey:  getEnv("GROQ_API_KEY", ""),
-		GroqModel:   getEnv("GROQ_MODEL", "llama-3.1-8b-instant"),
-		GroqAPIURL:  getEnv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions"),
+		GroqModel:   getEnv("GROQ_MODEL", ""),
+		GroqAPIURL:  getEnv("GROQ_API_URL", ""),
 		GroqTimeout: time.Duration(getEnvAsInt("GROQ_TIMEOUT_SECONDS", 30)) * time.Second,
 
 		// Google AI
@@ -78,12 +78,12 @@ func LoadConfig() (*Config, error) {
 		EmbeddingVectorSize: getEnvAsInt("EMBEDDING_VECTOR_SIZE", 768),
 
 		// Qdrant
-		QdrantGRPCHost:        getEnv("QDRANT_GRPC_HOST", "localhost"),
+		QdrantGRPCHost:        getEnv("QDRANT_GRPC_HOST", ""),
 		QdrantGRPCPort:        getEnvAsInt("QDRANT_GRPC_PORT", 6334),
-		QdrantURL:             getEnv("QDRANT_URL", "http://localhost:6333"),
-		QdrantCollectionName:  getEnv("QDRANT_COLLECTION_NAME", "bpr_supra_rag"),
-		QdrantCacheCollection: getEnv("QDRANT_CACHE_COLLECTION", "bpr_supra_cache"),
-		QdrantDistanceMetric:  getEnv("QDRANT_DISTANCE_METRIC", "Cosine"),
+		QdrantURL:             getEnv("QDRANT_URL", ""),
+		QdrantCollectionName:  getEnv("QDRANT_COLLECTION_NAME", ""),
+		QdrantCacheCollection: getEnv("QDRANT_CACHE_COLLECTION", ""),
+		QdrantDistanceMetric:  getEnv("QDRANT_DISTANCE_METRIC", ""),
 		QdrantTimeout:         time.Duration(getEnvAsInt("QDRANT_TIMEOUT_SECONDS", 60)) * time.Second,
 
 		// Cache
@@ -94,14 +94,14 @@ func LoadConfig() (*Config, error) {
 		RAGSearchLimit: uint64(getEnvAsInt("RAG_SEARCH_LIMIT", 7)),
 
 		// Server
-		ServerPort: getEnv("SERVER_PORT", "8080"),
-		ServerHost: getEnv("SERVER_HOST", "localhost"),
+		ServerPort: getEnv("SERVER_PORT", ""),
+		ServerHost: getEnv("SERVER_HOST", ""),
 
 		// Query
 		QueryTimeout: time.Duration(getEnvAsInt("QUERY_TIMEOUT_SECONDS", 10)) * time.Second,
 
 		// Environment
-		AppEnv: getEnv("APP_ENV", "development"),
+		AppEnv: getEnv("APP_ENV", ""),
 		Debug:  getEnvAsBool("DEBUG", false),
 	}
 
