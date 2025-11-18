@@ -95,7 +95,7 @@ func GetDynamicSchemaContext() ([]string, error) {
 	return contexts, nil
 }
 
-func GetDynamicSqlExamples() ([]string, error) {
+func GetDynamicSqlExamples() ([]SqlExample, error) {
 	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
 	if DbInstance == nil {
 		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
@@ -123,7 +123,7 @@ func GetDynamicSqlExamples() ([]string, error) {
 	}
 	defer rows.Close()
 
-	var contexts []string
+	var contexts []SqlExample
 
 	for rows.Next() {
 		var promptExample, sqlExample string
@@ -132,7 +132,10 @@ func GetDynamicSqlExamples() ([]string, error) {
 		}
 
 		fullContekan := fmt.Sprintf("%s\n%s", promptExample, sqlExample)
-		contexts = append(contexts, fullContekan)
+		contexts = append(contexts, SqlExample{
+			FullContent: fullContekan,
+			PromptOnly:  promptExample,
+		})
 	}
 
 	if len(contexts) == 0 {

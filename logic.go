@@ -22,8 +22,8 @@ func GetSQL(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, err
 	}
-	if aiResp.SQL == "" {
-		return AISqlResponse{}, errors.New("AI tidak mengembalikan query")
+	if aiResp.SQL == "" && !aiResp.IsAmbiguous {
+		return AISqlResponse{}, errors.New("AI tidak mengembalikan query SQL.")
 	}
 
 	return aiResp, nil

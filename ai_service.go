@@ -149,6 +149,51 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
+	const SimilarityConfidenceThreshold = 0.72
+
+	if len(searchResponse) > 0 {
+		topResult := searchResponse[0]
+		log.Printf("🔍 Top RAG Score: %f", topResult.Score)
+
+		if topResult.Score < SimilarityConfidenceThreshold {
+			log.Println("⚠️ Prompt User Ambigu/Random. Memberikan saran...")
+
+			var suggestions []string
+			for _, item := range searchResponse {
+				// Ambil field 'prompt_preview' yang kita simpan di Langkah 1
+				// Atau parsing manual dari 'content' jika belum update train.go
+				if p := item.GetPayload(); p != nil {
+					if v, ok := p["content"]; ok {
+						// Hack: Ambil baris pertama (pertanyaan) dari konten
+						fullContent := v.GetStringValue()
+						lines := strings.Split(fullContent, "\n")
+						if len(lines) > 0 {
+							// Bersihkan string "-- Pertanyaan: "
+							cleanPrompt := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
+							cleanPrompt = strings.Replace(cleanPrompt, "\"", "", -1)
+							suggestions = append(suggestions, cleanPrompt)
+						}
+					}
+				}
+				if len(suggestions) >= 3 {
+					break
+				} // Ambil max 3 saran
+			}
+
+			return AISqlResponse{
+				IsAmbiguous: true,
+				Suggestions: suggestions,
+				PromptAsli:  userPrompt,
+			}, nil
+		}
+	} else {
+		// Jika sama sekali tidak ada hasil RAG
+		return AISqlResponse{
+			IsAmbiguous: true,
+			Suggestions: []string{"Tidak ada data yang mirip. Coba gunakan kata kunci yang lebih spesifik."},
+			PromptAsli:  userPrompt,
+		}, nil
+	}
 
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")

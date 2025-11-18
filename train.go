@@ -85,8 +85,9 @@ func mainTrain() {
 
 	// B. PROSES SQL EXAMPLES (Label: "sql")
 	log.Printf("Memproses %d Contoh SQL...", len(dynamicSQLExamples))
-	for i, content := range dynamicSQLExamples {
-		res, err := embedder.EmbedContent(ctx, genai.Text(content))
+	for i, item := range dynamicSQLExamples {
+
+		res, err := embedder.EmbedContent(ctx, genai.Text(item.FullContent)) // Asumsi struct baru
 		if err != nil {
 			log.Printf("Skip SQL #%d: %v", i, err)
 			continue
@@ -96,8 +97,9 @@ func mainTrain() {
 			ID:     uuid.NewString(),
 			Vector: res.Embedding.Values,
 			Payload: map[string]interface{}{
-				"content":  content,
-				"category": "sql",
+				"content":        item.FullContent, // Tetap simpan full untuk konteks LLM
+				"prompt_preview": item.PromptOnly,  // <--- TAMBAHAN PENTING: Simpan pertanyaan saja
+				"category":       "sql",
 			},
 		}
 		points = append(points, point)

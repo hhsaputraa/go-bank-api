@@ -17,8 +17,15 @@ type FeedbackRequest struct {
 }
 
 type AISqlResponse struct {
-	SQL        string
-	Vector     []float32
-	PromptAsli string
-	IsCached   bool
+	SQL         string
+	Vector      []float32
+	PromptAsli  string
+	IsCached    bool
+	IsAmbiguous bool
+	Suggestions []string
+}
+
+type SqlExample struct {
+	FullContent string
+	PromptOnly  string
 }

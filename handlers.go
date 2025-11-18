@@ -53,6 +53,15 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if aiResp.IsAmbiguous {
+		log.Println("Handler: Mendeteksi respon ambigu, mengirim saran ke frontend.")
+		respondWithJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "ambiguous",
+			"message":     "Maaf, saya kurang paham maksud Anda. Apakah maksud Anda salah satu dari ini?",
+			"suggestions": aiResp.Suggestions,
+		})
+		return
+	}
 	if aiResp.SQL == "" {
 		respondWithError(w, http.StatusBadRequest, "AI tidak mengembalikan query SQL.")
 		return
