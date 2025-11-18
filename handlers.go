@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -47,21 +48,183 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Menerima Prompt (Normalized): %s\n", normalizedPrompt)
 
-	sqlQuery, err := GetSQL(normalizedPrompt)
+	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if sqlQuery == "" {
+	if aiResp.IsAmbiguous {
+		log.Println("Handler: Mendeteksi respon ambigu, mengirim saran ke frontend.")
+		respondWithJSON(w, http.StatusOK, map[string]interface{}{
+			"status":      "ambiguous",
+			"message":     "Maaf, saya kurang paham maksud Anda. Apakah maksud Anda salah satu dari ini?",
+			"suggestions": aiResp.Suggestions,
+		})
+		return
+	}
+	if aiResp.SQL == "" {
 		respondWithError(w, http.StatusBadRequest, "AI tidak mengembalikan query SQL.")
 		return
 	}
-	log.Println("SQL yang akan dieksekusi:", sqlQuery)
 
-	data, err := ExecuteDynamicQuery(sqlQuery, nil)
+	log.Println("SQL yang akan dieksekusi:", aiResp.SQL)
+
+	data, err := ExecuteDynamicQuery(aiResp.SQL, nil)
+
+	if err != nil {
+		log.Printf("GAGAL EKSEKUSI: %v. SQL 'ngawur' TIDAK akan disimpan ke cache.", err)
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if !aiResp.IsCached {
+		SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
+	}
+
+	respondWithJSON(w, http.StatusOK, data)
+}
+
+func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Metode tidak diizinkan")
+		return
+	}
+
+	var req FeedbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Request body JSON tidak valid")
+		return
+	}
+
+	promptAsli := strings.TrimSpace(req.PromptAsli)
+	sqlKoreksi := strings.TrimSpace(req.SqlKoreksi)
+
+	if promptAsli == "" || sqlKoreksi == "" {
+		respondWithError(w, http.StatusBadRequest, "prompt_asli dan sql_koreksi tidak boleh kosong")
+		return
+	}
+
+	log.Printf("Menerima Feedback Koreksi Baru. Prompt: %s", promptAsli)
+
+	if err := AddSqlExample(promptAsli, sqlKoreksi); err != nil {
+		log.Printf("ERROR: Gagal menyimpan feedback: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan feedback ke database")
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, map[string]string{
+		"status":  "sukses",
+		"message": "Feedback koreksi berhasil disimpan. Silakan 'retrain' untuk menerapkan.",
+	})
+}
+
+func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Metode tidak diizinkan")
+		return
+	}
+
+	log.Println("ADMIN: Menerima permintaan /admin/retrain...")
+
+	go func() {
+		log.Println("ADMIN: Proses retraining RAG (Embedding) dimulai di background...")
+		mainTrain()
+	}()
+
+	respondWithJSON(w, http.StatusAccepted, map[string]string{
+		"message": "Proses retraining RAG telah dimulai di background. Periksa log server untuk status.",
+	})
+}
+
+func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
+	collectionName := r.URL.Query().Get("collection")
+	if collectionName == "" {
+		respondWithError(w, http.StatusBadRequest, "Parameter 'collection' wajib diisi")
+		return
+	}
+
+	data, err := GetAllQdrantPoints(collectionName, 100)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
 	respondWithJSON(w, http.StatusOK, data)
+}
+
+func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req struct {
+		Prompt string `json:"prompt"`
+		SQL    string `json:"sql"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "JSON Body tidak valid")
+		return
+	}
+
+	if req.Prompt == "" || req.SQL == "" {
+		respondWithError(w, http.StatusBadRequest, "Prompt dan SQL tidak boleh kosong")
+		return
+	}
+
+	// Panggil fungsi inject yang baru kita buat
+	if err := ManualInjectCache(req.Prompt, req.SQL); err != nil {
+		log.Printf("Gagal inject cache: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan ke cache: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, map[string]string{
+		"status":  "success",
+		"message": "Cache berhasil disuntikkan! Pertanyaan ini sekarang akan di-bypass dari LLM.",
+	})
+}
+
+func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Collection string `json:"collection"` // Nama collection (wajib)
+		ID         string `json:"id"`         // ID data yang mau diedit (wajib)
+		Prompt     string `json:"prompt"`     // Data baru
+		SQL        string `json:"sql"`        // Data baru
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Body JSON tidak valid")
+		return
+	}
+
+	// Validasi input
+	if req.Collection == "" || req.ID == "" || req.Prompt == "" || req.SQL == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'collection', 'id', 'prompt', dan 'sql' wajib diisi semua!")
+		return
+	}
+
+	// Panggil fungsi update
+	if err := UpdateQdrantPoint(req.Collection, req.ID, req.Prompt, req.SQL); err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"status":  "updated",
+		"message": fmt.Sprintf("Data ID %s berhasil diperbarui.", req.ID),
+	})
 }

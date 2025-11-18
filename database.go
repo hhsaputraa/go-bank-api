@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
-	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -14,22 +12,23 @@ import (
 var DbInstance *sql.DB
 
 func ConnectDB() error {
-	connStr := os.Getenv("DB_CONN_STRING")
-	if connStr == "" {
-		return fmt.Errorf("DB_CONN_STRING tidak ditemukan di environment")
+	if AppConfig == nil {
+		return fmt.Errorf("konfigurasi aplikasi belum dimuat")
 	}
 
 	var err error
-	DbInstance, err = sql.Open("pgx", connStr)
+	DbInstance, err = sql.Open("pgx", AppConfig.DBConnString)
 	if err != nil {
 		return fmt.Errorf("gagal membuka koneksi database: %w", err)
 	}
 
-	DbInstance.SetMaxOpenConns(25)
-	DbInstance.SetMaxIdleConns(10)
-	DbInstance.SetConnMaxLifetime(5 * time.Minute)
+	// Set connection pool settings from config
+	DbInstance.SetMaxOpenConns(AppConfig.DBMaxOpenConns)
+	DbInstance.SetMaxIdleConns(AppConfig.DBMaxIdleConns)
+	DbInstance.SetConnMaxLifetime(AppConfig.DBConnMaxLifetime)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Test connection with timeout from config
+	ctx, cancel := context.WithTimeout(context.Background(), AppConfig.DBPingTimeout)
 	defer cancel()
 
 	err = DbInstance.PingContext(ctx)
@@ -37,6 +36,9 @@ func ConnectDB() error {
 		return fmt.Errorf("gagal melakukan ping ke database: %w", err)
 	}
 
-	log.Println("✅ Berhasil terkoneksi ke database 'postgres' dengan skema 'bpr_supra'!")
+	log.Printf("✅ Berhasil terkoneksi ke database PostgreSQL!")
+	log.Printf("   - Max Open Connections: %d", AppConfig.DBMaxOpenConns)
+	log.Printf("   - Max Idle Connections: %d", AppConfig.DBMaxIdleConns)
+	log.Printf("   - Connection Max Lifetime: %v", AppConfig.DBConnMaxLifetime)
 	return nil
 }

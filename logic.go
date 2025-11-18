@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -17,71 +15,18 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-const CACHE_FILE = "cache.json"
+func GetSQL(userPrompt string) (AISqlResponse, error) {
+	log.Println("Memanggil AI Service (dengan semantic cache)...")
 
-var queryCache = make(map[string]string)
-
-var cacheMutex = &sync.RWMutex{}
-
-func LoadCache() error {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	file, err := os.ReadFile(CACHE_FILE)
+	aiResp, err := getSQLFromAI_Groq(userPrompt)
 	if err != nil {
-		if os.IsNotExist(err) {
-			log.Println("File cache.json tidak ditemukan, cache baru akan dibuat.")
-			queryCache = make(map[string]string)
-			return nil
-		}
-		return err
+		return AISqlResponse{}, err
+	}
+	if aiResp.SQL == "" && !aiResp.IsAmbiguous {
+		return AISqlResponse{}, errors.New("AI tidak mengembalikan query SQL.")
 	}
 
-	err = json.Unmarshal(file, &queryCache)
-	if err != nil {
-		log.Printf("PERINGATAN: Gagal parse cache.json, cache baru akan dibuat. Error: %v", err)
-		queryCache = make(map[string]string)
-	}
-	return nil
-}
-
-func saveCache() error {
-	file, err := json.MarshalIndent(queryCache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(CACHE_FILE, file, 0644)
-}
-
-func GetSQL(userPrompt string) (string, error) {
-	cacheMutex.RLock()
-	sql, found := queryCache[userPrompt]
-	cacheMutex.RUnlock()
-
-	if found {
-		log.Println("CACHE HIT! Menggunakan SQL dari cache.json.")
-		return sql, nil
-	}
-
-	log.Println("CACHE MISS. Memanggil Groq AI...")
-	newSQL, err := getSQLFromAI_Groq(userPrompt)
-	if err != nil {
-		return "", err
-	}
-	if newSQL == "" {
-		return "", errors.New("AI tidak mengembalikan query")
-	}
-
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	queryCache[userPrompt] = newSQL
-
-	if err := saveCache(); err != nil {
-		log.Printf("PERINGATAN: Gagal menyimpan cache ke file: %v", err)
-	}
-
-	return newSQL, nil
+	return aiResp, nil
 }
 
 func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {
@@ -164,16 +109,53 @@ func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {
 }
 
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
-
 	var result QueryResult
+	cleanQuery := strings.TrimSpace(strings.ToUpper(query))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if !strings.HasPrefix(cleanQuery, "SELECT") && !strings.HasPrefix(cleanQuery, "WITH") {
+		return result, fmt.Errorf("KEAMANAN: Hanya query SELECT yang diizinkan. Query Anda: %s", query)
+	}
+
+	forbidden := []string{"DROP ", "DELETE ", "UPDATE ", "INSERT ", "TRUNCATE ", "ALTER ", "GRANT ", "REVOKE "}
+	for _, word := range forbidden {
+		if strings.Contains(cleanQuery, word) {
+			return result, fmt.Errorf("KEAMANAN: Ditemukan kata kunci terlarang '%s'", word)
+		}
+	}
+
+	// 3. Cek Multiple Statements (mencegah "SELECT ...; DROP ...")
+	if strings.Contains(query, ";") {
+		// Opsional: Bisa ditolak, atau dibiarkan jika yakin driver pgx menolak multiple statement
+		// Untuk keamanan maksimal, tolak jika ada titik koma di tengah
+		// return result, fmt.Errorf("KEAMANAN: Query chaining (titik koma) tidak diizinkan.")
+	}
+
+	timeout := 10 * time.Second
+	if AppConfig != nil {
+		timeout = AppConfig.QueryTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	rows, err := DbInstance.QueryContext(ctx, query, params...)
+	txOptions := &sql.TxOptions{
+		Isolation: sql.LevelDefault,
+		ReadOnly:  true, // <--- INI KUNCINYA! Database akan menolak write apapun.
+	}
+
+	tx, err := DbInstance.BeginTx(ctx, txOptions)
+	if err != nil {
+		return result, fmt.Errorf("gagal memulai transaksi read-only: %w", err)
+	}
+	// Selalu Rollback di akhir (karena kita cuma baca, tidak perlu Commit)
+	defer tx.Rollback()
+
+	// Eksekusi query menggunakan tx (bukan DbInstance langsung)
+	rows, err := tx.QueryContext(ctx, query, params...)
 	if err != nil {
 		log.Printf("Error eksekusi query: %v. Query: %s", err, query)
-		return result, fmt.Errorf("gagal mengeksekusi query: %w", err)
+		// Pesan error generik ke user agar tidak membocorkan struktur internal
+		return result, fmt.Errorf("gagal mengeksekusi query (mungkin query tidak valid atau melanggar aturan read-only)")
 	}
 	defer rows.Close()
 
