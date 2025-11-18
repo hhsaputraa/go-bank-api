@@ -10,4 +10,5 @@ func RegisterRoutes() {
 	http.HandleFunc("/admin/qdrant/list", HandleAdminListQdrant)
 	// http.HandleFunc("/admin/qdrant/delete", HandleAdminDeleteQdrant)
 	http.HandleFunc("/admin/cache/create", HandleAdminCacheCreate)
+	http.HandleFunc("/admin/qdrant/update", HandleAdminQdrantUpdate)
 }

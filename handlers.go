@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -180,5 +181,41 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusCreated, map[string]string{
 		"status":  "success",
 		"message": "Cache berhasil disuntikkan! Pertanyaan ini sekarang akan di-bypass dari LLM.",
+	})
+}
+
+func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Collection string `json:"collection"` // Nama collection (wajib)
+		ID         string `json:"id"`         // ID data yang mau diedit (wajib)
+		Prompt     string `json:"prompt"`     // Data baru
+		SQL        string `json:"sql"`        // Data baru
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Body JSON tidak valid")
+		return
+	}
+
+	// Validasi input
+	if req.Collection == "" || req.ID == "" || req.Prompt == "" || req.SQL == "" {
+		respondWithError(w, http.StatusBadRequest, "Field 'collection', 'id', 'prompt', dan 'sql' wajib diisi semua!")
+		return
+	}
+
+	// Panggil fungsi update
+	if err := UpdateQdrantPoint(req.Collection, req.ID, req.Prompt, req.SQL); err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"status":  "updated",
+		"message": fmt.Sprintf("Data ID %s berhasil diperbarui.", req.ID),
 	})
 }

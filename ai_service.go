@@ -495,6 +495,33 @@ func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataRespon
 	return results, nil
 }
 
+func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery string) error {
+	vector, err := GenerateEmbedding(prompt)
+	if err != nil {
+		return fmt.Errorf("gagal generate embedding saat update: %w", err)
+	}
+
+	point := qdrantPoint{
+		ID:     id,
+		Vector: vector,
+		Payload: map[string]interface{}{
+			"prompt_asli": prompt,
+			"sql_query":   sqlQuery,
+			// Tambahkan field lain jika perlu, misal "category": "sql" untuk RAG
+		},
+	}
+
+	// 3. Timpa data lama (Upsert)
+	ctx := context.Background()
+	err = qdrantUpsertPoints(ctx, AppConfig.QdrantURL, collectionName, []qdrantPoint{point})
+	if err != nil {
+		return fmt.Errorf("gagal update ke qdrant: %w", err)
+	}
+
+	log.Printf("✅ UPDATE SUKSES: Collection '%s', ID '%s'", collectionName, id)
+	return nil
+}
+
 func GenerateEmbedding(text string) ([]float32, error) {
 	if geminiEmbedder == nil {
 		return nil, fmt.Errorf("service embedding belum diinisialisasi")
