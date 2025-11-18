@@ -132,3 +132,53 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 		"message": "Proses retraining RAG telah dimulai di background. Periksa log server untuk status.",
 	})
 }
+
+func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
+	collectionName := r.URL.Query().Get("collection")
+	if collectionName == "" {
+		respondWithError(w, http.StatusBadRequest, "Parameter 'collection' wajib diisi")
+		return
+	}
+
+	data, err := GetAllQdrantPoints(collectionName, 100)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, data)
+}
+
+func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req struct {
+		Prompt string `json:"prompt"`
+		SQL    string `json:"sql"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "JSON Body tidak valid")
+		return
+	}
+
+	if req.Prompt == "" || req.SQL == "" {
+		respondWithError(w, http.StatusBadRequest, "Prompt dan SQL tidak boleh kosong")
+		return
+	}
+
+	// Panggil fungsi inject yang baru kita buat
+	if err := ManualInjectCache(req.Prompt, req.SQL); err != nil {
+		log.Printf("Gagal inject cache: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan ke cache: "+err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, map[string]string{
+		"status":  "success",
+		"message": "Cache berhasil disuntikkan! Pertanyaan ini sekarang akan di-bypass dari LLM.",
+	})
+}

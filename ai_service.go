@@ -263,8 +263,6 @@ type qdrantPoint struct {
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
-// getQdrantBaseURL is deprecated - use AppConfig.QdrantURL instead
-
 func getQdrantBaseURL() string {
 	if AppConfig != nil {
 		return AppConfig.QdrantURL
@@ -375,6 +373,12 @@ type qdrantSearchResult struct {
 	Payload map[string]interface{} `json:"payload"`
 }
 
+type QdrantDataResponse struct {
+	ID      string                 `json:"id"`
+	Payload map[string]interface{} `json:"payload"`
+	Vector  []float32              `json:"vector,omitempty"` // Opsional, kalau mau lihat vectornya
+}
+
 func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSearchReq) (qdrantSearchResp, error) {
 	url := fmt.Sprintf("%s/collections/%s/points/search", baseURL, name)
 	var respData qdrantSearchResp
@@ -420,4 +424,116 @@ func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 			log.Println("Berhasil menyimpan ke cache.")
 		}
 	}()
+}
+
+func convertQdrantValue(value *pb.Value) interface{} {
+	switch k := value.Kind.(type) {
+	case *pb.Value_NullValue:
+		return nil
+	case *pb.Value_DoubleValue:
+		return k.DoubleValue
+	case *pb.Value_IntegerValue:
+		return k.IntegerValue
+	case *pb.Value_StringValue:
+		return k.StringValue
+	case *pb.Value_BoolValue:
+		return k.BoolValue
+	case *pb.Value_StructValue:
+		// Jika nilainya berupa object/map
+		result := make(map[string]interface{})
+		for key, v := range k.StructValue.Fields {
+			result[key] = convertQdrantValue(v)
+		}
+		return result
+	case *pb.Value_ListValue:
+		// Jika nilainya berupa array/list
+		var result []interface{}
+		for _, v := range k.ListValue.Values {
+			result = append(result, convertQdrantValue(v))
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataResponse, error) {
+	ctx := context.Background()
+
+	scrollResp, err := qdrantClient.Scroll(ctx, &pb.ScrollPoints{
+		CollectionName: collectionName,
+		Limit:          &limit,
+		WithPayload:    pb.NewWithPayload(true),
+		WithVectors:    pb.NewWithVectors(false),
+		Offset:         nil,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("gagal scroll data qdrant: %w", err)
+	}
+
+	var results []QdrantDataResponse
+	for _, item := range scrollResp {
+		var idStr string
+		if item.Id.GetUuid() != "" {
+			idStr = item.Id.GetUuid()
+		} else {
+			idStr = fmt.Sprintf("%d", item.Id.GetNum())
+		}
+
+		cleanPayload := make(map[string]interface{})
+		for key, value := range item.Payload {
+			cleanPayload[key] = convertQdrantValue(value)
+		}
+
+		results = append(results, QdrantDataResponse{
+			ID:      idStr,
+			Payload: cleanPayload,
+		})
+	}
+
+	return results, nil
+}
+
+func GenerateEmbedding(text string) ([]float32, error) {
+	if geminiEmbedder == nil {
+		return nil, fmt.Errorf("service embedding belum diinisialisasi")
+	}
+
+	ctx := context.Background()
+	res, err := geminiEmbedder.EmbedContent(ctx, genai.Text(text))
+	if err != nil {
+		return nil, err
+	}
+
+	return res.Embedding.Values, nil
+}
+
+// Fungsi untuk Inject Cache secara Manual
+func ManualInjectCache(promptAsli string, sqlQuery string) error {
+	// 1. Generate Vector dari Prompt
+	vector, err := GenerateEmbedding(promptAsli)
+	if err != nil {
+		return fmt.Errorf("gagal membuat embedding: %w", err)
+	}
+
+	// 2. Siapkan Point Qdrant
+	point := qdrantPoint{
+		ID:     uuid.NewString(),
+		Vector: vector,
+		Payload: map[string]interface{}{
+			"prompt_asli": promptAsli,
+			"sql_query":   sqlQuery,
+		},
+	}
+
+	// 3. Simpan langsung ke Collection Cache
+	ctx := context.Background()
+	err = qdrantUpsertPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{point})
+	if err != nil {
+		return fmt.Errorf("gagal upsert ke qdrant: %w", err)
+	}
+
+	log.Printf("✅ MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
+	return nil
 }
