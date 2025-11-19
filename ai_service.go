@@ -65,8 +65,9 @@ type GroqMessage struct {
 	Content string `json:"content"`
 }
 type GroqRequest struct {
-	Model    string        `json:"model"`
-	Messages []GroqMessage `json:"messages"`
+	Model       string        `json:"model"`
+	Messages    []GroqMessage `json:"messages"`
+	Temperature float32       `json:"temperature"`
 }
 type GroqResponse struct {
 	Choices []struct {
@@ -158,26 +159,79 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 		if topResult.Score < SimilarityConfidenceThreshold {
 			log.Println("⚠️ Prompt User Ambigu/Random. Memberikan saran...")
 
+			seen := make(map[string]bool)
 			var suggestions []string
+
+			addSuggestion := func(s string) {
+				clean := s
+				if idx := strings.Index(strings.ToLower(clean), "pertanyaan:"); idx != -1 {
+					clean = clean[idx+len("pertanyaan:"):]
+				}
+				clean = strings.ReplaceAll(clean, "--", "")
+				clean = strings.ReplaceAll(clean, "\"", "")
+				clean = strings.TrimSpace(clean)
+				if clean == "" {
+					return
+				}
+				lower := strings.ToLower(clean)
+				if !seen[lower] {
+					suggestions = append(suggestions, clean)
+					seen[lower] = true
+				}
+			}
+
 			for _, item := range searchResponse {
-				// Ambil field 'prompt_preview' yang kita simpan di Langkah 1
-				// Atau parsing manual dari 'content' jika belum update train.go
 				if p := item.GetPayload(); p != nil {
-					if v, ok := p["content"]; ok {
-						// Hack: Ambil baris pertama (pertanyaan) dari konten
+					if v, ok := p["prompt_preview"]; ok {
+						addSuggestion(v.GetStringValue())
+					} else if v, ok := p["content"]; ok {
 						fullContent := v.GetStringValue()
 						lines := strings.Split(fullContent, "\n")
 						if len(lines) > 0 {
-							// Bersihkan string "-- Pertanyaan: "
-							cleanPrompt := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
-							cleanPrompt = strings.Replace(cleanPrompt, "\"", "", -1)
-							suggestions = append(suggestions, cleanPrompt)
+							clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
+							clean = strings.Replace(clean, "\"", "", -1)
+							addSuggestion(clean)
 						}
 					}
 				}
 				if len(suggestions) >= 3 {
 					break
-				} // Ambil max 3 saran
+				}
+			}
+
+			if len(cacheResponse.Result) > 0 {
+				for _, item := range cacheResponse.Result {
+					if len(suggestions) >= 5 {
+						break
+					}
+
+					if val, ok := item.Payload["prompt_asli"]; ok {
+						if promptStr, ok := val.(string); ok {
+							addSuggestion(promptStr)
+						}
+					}
+				}
+			}
+			if len(suggestions) < 5 {
+				for _, item := range searchResponse {
+					if len(suggestions) >= 5 {
+						break
+					}
+
+					if p := item.GetPayload(); p != nil {
+						if v, ok := p["prompt_preview"]; ok {
+							addSuggestion(v.GetStringValue())
+						} else if v, ok := p["content"]; ok {
+							fullContent := v.GetStringValue()
+							lines := strings.Split(fullContent, "\n")
+							if len(lines) > 0 {
+								clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
+								clean = strings.Replace(clean, "\"", "", -1)
+								addSuggestion(clean)
+							}
+						}
+					}
+				}
 			}
 
 			return AISqlResponse{
@@ -187,7 +241,6 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 			}, nil
 		}
 	} else {
-		// Jika sama sekali tidak ada hasil RAG
 		return AISqlResponse{
 			IsAmbiguous: true,
 			Suggestions: []string{"Tidak ada data yang mirip. Coba gunakan kata kunci yang lebih spesifik."},
@@ -245,8 +298,9 @@ Query SQL:`,
 	)
 
 	groqReqBody := GroqRequest{
-		Model:    AppConfig.GroqModel,
-		Messages: []GroqMessage{{Role: "user", Content: finalPrompt}},
+		Model:       AppConfig.GroqModel,
+		Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
+		Temperature: 0,
 	}
 	jsonBody, err := json.Marshal(groqReqBody)
 	if err != nil {
@@ -484,14 +538,12 @@ func convertQdrantValue(value *pb.Value) interface{} {
 	case *pb.Value_BoolValue:
 		return k.BoolValue
 	case *pb.Value_StructValue:
-		// Jika nilainya berupa object/map
 		result := make(map[string]interface{})
 		for key, v := range k.StructValue.Fields {
 			result[key] = convertQdrantValue(v)
 		}
 		return result
 	case *pb.Value_ListValue:
-		// Jika nilainya berupa array/list
 		var result []interface{}
 		for _, v := range k.ListValue.Values {
 			result = append(result, convertQdrantValue(v))
@@ -552,11 +604,9 @@ func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery
 		Payload: map[string]interface{}{
 			"prompt_asli": prompt,
 			"sql_query":   sqlQuery,
-			// Tambahkan field lain jika perlu, misal "category": "sql" untuk RAG
 		},
 	}
 
-	// 3. Timpa data lama (Upsert)
 	ctx := context.Background()
 	err = qdrantUpsertPoints(ctx, AppConfig.QdrantURL, collectionName, []qdrantPoint{point})
 	if err != nil {
@@ -581,15 +631,12 @@ func GenerateEmbedding(text string) ([]float32, error) {
 	return res.Embedding.Values, nil
 }
 
-// Fungsi untuk Inject Cache secara Manual
 func ManualInjectCache(promptAsli string, sqlQuery string) error {
-	// 1. Generate Vector dari Prompt
 	vector, err := GenerateEmbedding(promptAsli)
 	if err != nil {
 		return fmt.Errorf("gagal membuat embedding: %w", err)
 	}
 
-	// 2. Siapkan Point Qdrant
 	point := qdrantPoint{
 		ID:     uuid.NewString(),
 		Vector: vector,

@@ -123,11 +123,8 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 		}
 	}
 
-	// 3. Cek Multiple Statements (mencegah "SELECT ...; DROP ...")
 	if strings.Contains(query, ";") {
-		// Opsional: Bisa ditolak, atau dibiarkan jika yakin driver pgx menolak multiple statement
-		// Untuk keamanan maksimal, tolak jika ada titik koma di tengah
-		// return result, fmt.Errorf("KEAMANAN: Query chaining (titik koma) tidak diizinkan.")
+
 	}
 
 	timeout := 10 * time.Second
@@ -140,21 +137,17 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 
 	txOptions := &sql.TxOptions{
 		Isolation: sql.LevelDefault,
-		ReadOnly:  true, // <--- INI KUNCINYA! Database akan menolak write apapun.
+		ReadOnly:  true,
 	}
 
 	tx, err := DbInstance.BeginTx(ctx, txOptions)
 	if err != nil {
 		return result, fmt.Errorf("gagal memulai transaksi read-only: %w", err)
 	}
-	// Selalu Rollback di akhir (karena kita cuma baca, tidak perlu Commit)
 	defer tx.Rollback()
-
-	// Eksekusi query menggunakan tx (bukan DbInstance langsung)
 	rows, err := tx.QueryContext(ctx, query, params...)
 	if err != nil {
 		log.Printf("Error eksekusi query: %v. Query: %s", err, query)
-		// Pesan error generik ke user agar tidak membocorkan struktur internal
 		return result, fmt.Errorf("gagal mengeksekusi query (mungkin query tidak valid atau melanggar aturan read-only)")
 	}
 	defer rows.Close()

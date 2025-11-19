@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
@@ -86,8 +87,13 @@ func mainTrain() {
 	// B. PROSES SQL EXAMPLES (Label: "sql")
 	log.Printf("Memproses %d Contoh SQL...", len(dynamicSQLExamples))
 	for i, item := range dynamicSQLExamples {
+		cleanPrompt := item.PromptOnly
+		cleanPrompt = strings.Replace(cleanPrompt, "-- Pertanyaan: ", "", 1) // Hapus prefix
+		cleanPrompt = strings.Replace(cleanPrompt, "\"", "", -1)             // Hapus tanda kutip
+		cleanPrompt = strings.TrimSpace(cleanPrompt)
+		log.Printf("Embedding Prompt Bersih: '%s'", cleanPrompt)
 
-		res, err := embedder.EmbedContent(ctx, genai.Text(item.FullContent)) // Asumsi struct baru
+		res, err := embedder.EmbedContent(ctx, genai.Text(cleanPrompt)) // Asumsi struct baru
 		if err != nil {
 			log.Printf("Skip SQL #%d: %v", i, err)
 			continue
@@ -97,8 +103,8 @@ func mainTrain() {
 			ID:     uuid.NewString(),
 			Vector: res.Embedding.Values,
 			Payload: map[string]interface{}{
-				"content":        item.FullContent, // Tetap simpan full untuk konteks LLM
-				"prompt_preview": item.PromptOnly,  // <--- TAMBAHAN PENTING: Simpan pertanyaan saja
+				"content":        item.FullContent,
+				"prompt_preview": cleanPrompt,
 				"category":       "sql",
 			},
 		}
