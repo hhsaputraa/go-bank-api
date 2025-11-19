@@ -177,3 +177,32 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 	log.Printf("✅ Berhasil! Menyimpan contekan baru ke 'rag_sql_examples' untuk prompt: %s", promptAsli)
 	return nil
 }
+
+type DictionaryItem struct {
+	Istilah   string
+	Definisi  string
+	LogikaSQL string
+}
+
+func GetBusinessDictionary(ctx context.Context) (string, error) {
+	rows, err := DbInstance.QueryContext(ctx, "SELECT istilah, definisi_bisnis, logika_sql FROM ai_dictionary")
+	if err != nil {
+		return "", nil
+	}
+	defer rows.Close()
+
+	var builder strings.Builder
+	builder.WriteString("== KAMUS ISTILAH BISNIS (PRIORITAS TINGGI) ==\n")
+	builder.WriteString("Gunakan logika ini jika user menyebut kata kunci berikut:\n")
+
+	for rows.Next() {
+		var d DictionaryItem
+		if err := rows.Scan(&d.Istilah, &d.Definisi, &d.LogikaSQL); err != nil {
+			return "", err
+		}
+		line := fmt.Sprintf("- \"%s\" bermakna: %s. (SQL Logic Wajib: `%s`)\n", d.Istilah, d.Definisi, d.LogikaSQL)
+		builder.WriteString(line)
+	}
+
+	return builder.String(), nil
+}

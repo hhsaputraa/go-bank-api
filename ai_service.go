@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -150,7 +151,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
-	const SimilarityConfidenceThreshold = 0.72
+	const SimilarityConfidenceThreshold = 0.5
 
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
@@ -271,27 +272,45 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 	allDDLString := strings.Join(allDDLs, "\n---\n")
 
+	businessDict, err := GetBusinessDictionary(ctx)
+	if err != nil {
+		log.Println("Warning: Gagal ambil dictionary:", err)
+		businessDict = ""
+	}
+
 	finalPrompt := fmt.Sprintf(`
 Anda adalah ahli SQL PostgreSQL. Tanggal hari ini (CURRENT_DATE) adalah %s.
-
+== KAMUS BISNIS ==
+%s
 == KAMUS DATABASE (SEMUA DDL) ==
-Berikut adalah DDL LENGKAP untuk skema "bpr_supra". JANGAN halusinasi kolom/tabel di luar ini:
+Berikut adalah DDL LENGKAP. JANGAN halusinasi kolom/tabel di luar ini:
 %s
 
 == CONTOH SQL (PALING RELEVAN) ==
-Berikut adalah CONTOH SQL yang relevan dengan pertanyaan user:
 %s
 
 Tugas Anda:
-1. Berdasarkan "KAMUS DATABASE" di atas, jawab pertanyaan pengguna.
-2. Gunakan "CONTOH SQL" sebagai inspirasi pola.
-3. JANGAN pakai markdown (sql). JANGAN tambahkan penjelasan. Hanya SQL.
-4. JANGAN PERNAH menggunakan SELECT *; selalu sebutkan nama kolomnya.
+1. ANALISIS: Cek apakah pertanyaan user mengandung kata di "KAMUS ISTILAH BISNIS". Jika YA, Anda WAJIB menggunakan "SQL Logic Wajib" yang tertera di sana.
+2.VALIDASI KOLOM (CRITICAL / WAJIB): 
+   - Sebelum menulis query, BACA ULANG "DDL" di atas.
+   - Cek setiap kolom yang ingin Anda panggil.
+   - APAKAH KOLOM ITU ADA DI DDL?
+   - Jika TIDAK ADA: Hapus kolom itu dari query. JANGAN MENEBAK.
+   - Jika RAG meminta kolom yang tidak ada di DDL: ABAIKAN RAG TERSEBUT. DDL ADALAH KEBENARAN MUTLAK.
+3. STRATEGI: Tentukan apakah perlu JOIN, GROUP BY, atau klausa WHERE khusus.
+4. EKSEKUSI: Tulis query SQL final di dalam blok markdown code.
+
+Format Jawaban Wajib:
+Penjelasan: <Jelaskan langkah berpikir Anda secara singkat di sini>
+
+`+"```sql"+`
+<Tulis Query SQL Di Sini>
+`+"```"+`
 
 Pertanyaan Pengguna: "%s"
-
-Query SQL:`,
+`,
 		time.Now().Format("2006-01-02"),
+		businessDict,
 		allDDLString,
 		sqlContext,
 		userPrompt,
@@ -333,8 +352,23 @@ Query SQL:`,
 		return AISqlResponse{}, errors.New("AI tidak memberikan balasan")
 	}
 
-	sqlQuery := strings.TrimSpace(groqResp.Choices[0].Message.Content)
-	sqlQuery = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(sqlQuery, "```sql"), "```"))
+	rawContent := groqResp.Choices[0].Message.Content
+	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
+	re := regexp.MustCompile("(?s)```sql(.*?)```")
+	match := re.FindStringSubmatch(rawContent)
+
+	var sqlQuery string
+	if len(match) > 1 {
+		sqlQuery = strings.TrimSpace(match[1])
+	} else {
+		log.Println("⚠️ AI tidak menggunakan format markdown SQL, mencoba membersihkan manual...")
+		sqlQuery = strings.TrimSpace(rawContent)
+		if idx := strings.Index(strings.ToLower(sqlQuery), "select"); idx != -1 {
+			sqlQuery = sqlQuery[idx:]
+		}
+	}
+
+	log.Println("SQL dari AI (Extracted):", sqlQuery)
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 
 	return AISqlResponse{
