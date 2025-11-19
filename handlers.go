@@ -76,12 +76,29 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if req.TriggerPrompt != "" {
+		log.Printf("🔗 LEARNING: User mengaitkan '%s' -> SQL hasil ini", req.TriggerPrompt)
+
+		go func(trigger string, sqlQueryResult string) {
+			if err := ManualInjectCache(trigger, sqlQueryResult); err != nil {
+				log.Printf("⚠️ Gagal melakukan auto-learning untuk trigger cache: %v", err)
+			} else {
+				log.Printf("✅ Auto-learning sukses: '%s' sekarang tercache!", trigger)
+			}
+		}(req.TriggerPrompt, aiResp.SQL)
+	}
 
 	if !aiResp.IsCached {
 		SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
 	}
 
-	respondWithJSON(w, http.StatusOK, data)
+	responsePayload := map[string]interface{}{
+		"columns":   data.Columns,
+		"rows":      data.Rows,
+		"is_cached": aiResp.IsCached,
+	}
+
+	respondWithJSON(w, http.StatusOK, responsePayload)
 }
 
 func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
@@ -226,5 +243,45 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, map[string]string{
 		"status":  "updated",
 		"message": fmt.Sprintf("Data ID %s berhasil diperbarui.", req.ID),
+	})
+}
+
+func HandleForgetCache(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Handle Preflight Request (Browser mengecek izin dulu sebelum kirim data)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "JSON Body invalid")
+		return
+	}
+
+	if req.Prompt == "" {
+		respondWithError(w, http.StatusBadRequest, "Prompt wajib diisi")
+		return
+	}
+
+	if err := DeleteCacheByPrompt(req.Prompt); err != nil {
+		respondWithError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]string{
+		"status":  "deleted",
+		"message": fmt.Sprintf("Saya sudah melupakan konteks untuk '%s'. Silakan tanya ulang.", req.Prompt),
 	})
 }

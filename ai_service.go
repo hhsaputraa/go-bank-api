@@ -150,7 +150,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
-	const SimilarityConfidenceThreshold = 0.72
+	const SimilarityConfidenceThreshold = 0.7
 
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
@@ -654,5 +654,42 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 	}
 
 	log.Printf("✅ MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
+	return nil
+}
+
+func DeleteCacheByPrompt(prompt string) error {
+	if AppConfig == nil {
+		return fmt.Errorf("konfigurasi belum dimuat")
+	}
+	ctx := context.Background()
+	_, err := qdrantClient.Delete(ctx, &pb.DeletePoints{
+		CollectionName: AppConfig.QdrantCacheCollection,
+		Points: &pb.PointsSelector{
+			PointsSelectorOneOf: &pb.PointsSelector_Filter{
+				Filter: &pb.Filter{
+					Must: []*pb.Condition{
+						{
+							ConditionOneOf: &pb.Condition_Field{
+								Field: &pb.FieldCondition{
+									Key: "prompt_asli",
+									Match: &pb.Match{
+										MatchValue: &pb.Match_Keyword{
+											Keyword: prompt,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("gagal menghapus cache qdrant: %w", err)
+	}
+
+	log.Printf("Berhasil menghapus memori cache untuk prompt: '%s'", prompt)
 	return nil
 }

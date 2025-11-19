@@ -1,14 +1,16 @@
 package main
 
 type QueryRequest struct {
-	Laporan string `json:"laporan"`
-	Target  string `json:"target"`
-	ID      string `json:"id"`
-	Periode string `json:"periode"`
+	Laporan       string `json:"laporan"`
+	Target        string `json:"target"`
+	ID            string `json:"id"`
+	Periode       string `json:"periode"`
+	TriggerPrompt string `json:"trigger_prompt, omniempty"`
 }
 
 type PromptRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt        string `json:"prompt"`
+	TriggerPrompt string `json:"trigger_prompt, omniempty"`
 }
 
 type FeedbackRequest struct {
