@@ -24,64 +24,86 @@ func HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
-
+	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if r.Method != http.MethodPost {
-		respondWithError(w, http.StatusMethodNotAllowed, "Metode tidak diizinkan")
+		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
 		return
 	}
+
+	// Decode request
 	var req PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondWithError(w, http.StatusBadRequest, "Request body JSON tidak valid")
+		sendError(w, http.StatusBadRequest, "INVALID_JSON", "Format JSON tidak valid")
 		return
 	}
+
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
-		respondWithError(w, http.StatusBadRequest, "Prompt tidak boleh kosong")
+		sendError(w, http.StatusBadRequest, "EMPTY_PROMPT", "Prompt tidak boleh kosong")
 		return
 	}
-	log.Printf("Menerima Prompt (Normalized): %s\n", normalizedPrompt)
 
-	aiResp, err := GetSQL(normalizedPrompt)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+	log.Printf("Menerima Prompt (Normalized): %s", normalizedPrompt)
+
+	if isAbsurd, err := IsAbsurdPrompt(r.Context(), normalizedPrompt); err != nil {
+		log.Printf("Error cek absurd: %v", err)
+		sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
 		return
-	}
-	if aiResp.IsAmbiguous {
-		log.Println("Handler: Mendeteksi respon ambigu, mengirim saran ke frontend.")
-		respondWithJSON(w, http.StatusOK, map[string]interface{}{
-			"status":      "ambiguous",
-			"message":     "Maaf, saya kurang paham maksud Anda. Apakah maksud Anda salah satu dari ini?",
-			"suggestions": aiResp.Suggestions,
+	} else if isAbsurd {
+		sendAmbiguous(w, "Pertanyaan tidak dapat diproses karena tidak relevan dengan data perbankan", []string{
+			"ada berapa orang penabung saat ini",
+			"nasabah yang jenis tabungan nya deposito",
 		})
 		return
 	}
-	if aiResp.SQL == "" {
-		respondWithError(w, http.StatusBadRequest, "AI tidak mengembalikan query SQL.")
-		return
-	}
 
-	log.Println("SQL yang akan dieksekusi:", aiResp.SQL)
-
-	data, err := ExecuteDynamicQuery(aiResp.SQL, nil)
-
+	// === CALL AI ===
+	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
-		log.Printf("GAGAL EKSEKUSI: %v. SQL 'ngawur' TIDAK akan disimpan ke cache.", err)
-		respondWithError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("AI gagal generate SQL: %v", err)
+		sendError(w, http.StatusInternalServerError, "AI_GENERATION_FAILED", "Gagal menghasilkan query SQL")
 		return
 	}
 
-	if !aiResp.IsCached {
-		SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
+	// === AMBIGUOUS DARI RAG ===
+	if aiResp.IsAmbiguous {
+		sendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
+		return
 	}
 
-	respondWithJSON(w, http.StatusOK, data)
+	// === SQL KOSONG ===
+	if strings.TrimSpace(aiResp.SQL) == "" {
+		sendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
+		return
+	}
+
+	log.Printf("SQL yang akan dieksekusi: %s", aiResp.SQL)
+
+	// === EKSEKUSI QUERY ===
+	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
+	if execErr != nil {
+		log.Printf("GAGAL EKSEKUSI QUERY: %v | SQL: %s", execErr, aiResp.SQL)
+		// JANGAN SIMPAN KE CACHE KALAU GAGAL!
+		sendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
+			"Query tidak dapat dieksekusi. Mungkin syntax salah atau melanggar aturan database",
+			execErr.Error())
+		return
+	}
+
+	// === SUCCESS: Simpan ke cache kalau bukan dari cache ===
+	if !aiResp.IsCached {
+		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL) // async
+	}
+
+	// === RESPON SUCCESS ===
+	sendSuccess(w, data)
 }
 
 func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {

@@ -29,3 +29,18 @@ type SqlExample struct {
 	FullContent string
 	PromptOnly  string
 }
+
+type AppError struct {
+	Code    string `json:"code"`    // untuk mapping di frontend
+	Message string `json:"message"` // untuk user
+	Detail  string `json:"detail,omitempty"`
+}
+
+type QueryResponse struct {
+	Status      string      `json:"status"`
+	Message     string      `json:"message,omitempty"`
+	Data        interface{} `json:"data,omitempty"`
+	Suggestions []string    `json:"suggestions,omitempty"`
+	ErrorCode   string      `json:"error_code,omitempty"`
+	ErrorDetail string      `json:"error_detail,omitempty"`
+}

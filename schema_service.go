@@ -206,3 +206,45 @@ func GetBusinessDictionary(ctx context.Context) (string, error) {
 
 	return builder.String(), nil
 }
+
+type AbsurdKeyword struct {
+	Keyword  string
+	Category string
+	IsActive bool
+}
+
+func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
+	if DbInstance == nil {
+		return false, fmt.Errorf("koneksi database (DbInstance) belum siap")
+	}
+
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return false, fmt.Errorf("gagal mendapatkan schema: %w", err)
+	}
+
+	lowerPrompt := strings.ToLower(prompt)
+
+	query := fmt.Sprintf(`
+        SELECT EXISTS (
+            SELECT 1 
+            FROM %s.absurd_keywords 
+            WHERE is_active = true 
+              AND $1 ILIKE '%%' || keyword || '%%'
+            LIMIT 1
+        )
+    `, schema)
+
+	var exists bool
+	err = DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
+	if err != nil {
+		log.Printf("Error query absurd_keywords: %v", err)
+		return false, err
+	}
+
+	if exists {
+		log.Printf("Prompt terdeteksi absurd: '%s'", prompt)
+	}
+
+	return exists, nil
+}

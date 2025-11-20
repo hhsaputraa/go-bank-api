@@ -76,6 +76,24 @@ type GroqResponse struct {
 	} `json:"choices"`
 }
 
+func sanitizeSQL(sql string) string {
+	lower := strings.ToLower(sql)
+
+	// Blokir DML (insert/update/delete)
+	if strings.Contains(lower, "insert") || strings.Contains(lower, "update") ||
+		strings.Contains(lower, "delete") || strings.Contains(lower, "drop") ||
+		strings.Contains(lower, "alter") || strings.Contains(lower, "create") {
+		return "" // Return kosong → handler akan tangkap sebagai EMPTY_SQL
+	}
+
+	// Pastikan mulai dengan SELECT
+	if !strings.HasPrefix(strings.TrimSpace(lower), "select") {
+		return ""
+	}
+
+	return sql
+}
+
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if AppConfig == nil {
 		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
@@ -251,11 +269,15 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	var contextBuilder strings.Builder
 	contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
+
+	seenContents := make(map[string]bool)
+
 	for _, point := range searchResponse {
 		if p := point.GetPayload(); p != nil {
 			if v, ok := p["content"]; ok {
 				contekan := v.GetStringValue()
-				if contekan != "" {
+				if contekan != "" && !seenContents[contekan] {
+					seenContents[contekan] = true
 					contextBuilder.WriteString(contekan)
 					contextBuilder.WriteString("\n---\n")
 				}
@@ -279,7 +301,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 
 	finalPrompt := fmt.Sprintf(`
-Anda adalah ahli SQL PostgreSQL. Tanggal hari ini (CURRENT_DATE) adalah %s.
+Anda adalah ahli SQL PostgreSQL senior yang sangat hati-hati dan akurat. Tanggal hari ini (CURRENT_DATE) adalah %s.
 == KAMUS BISNIS ==
 %s
 == KAMUS DATABASE (SEMUA DDL) ==
@@ -288,6 +310,22 @@ Berikut adalah DDL LENGKAP. JANGAN halusinasi kolom/tabel di luar ini:
 
 == CONTOH SQL (PALING RELEVAN) ==
 %s
+
+ATURAN KERAS (WAJIB DIPATUHI 100%% TANPA Pengecualian):
+
+1. Jika pertanyaan user TIDAK BERHUBUNGAN dengan data bank (nasabah, rekening, transaksi, saldo, tipe nasabah, dll) → 
+   JAWAB LANGSUNG: "Maaf, pertanyaan tersebut tidak dapat dijawab karena tidak ada data terkait di sistem bank."
+   DAN JANGAN TULIS SQL SAMA SEKALI.
+
+2. Jika pertanyaan meminta data yang tidak ada di DDL (misal warna, hobi, zodiac, makanan kesukaan, cuaca, dll) →
+   JAWAB LANGSUNG: "Maaf, tidak ada kolom atau data terkait tersebut di database."
+   DAN JANGAN TULIS SQL.
+
+3. Hanya generate SQL jika pertanyaan jelas berhubungan dengan tabel yang ada di DDL dan bisa dijawab dengan data yang ada.
+
+4. Jika ragu → tolak dan jawab: "Maaf, pertanyaan tidak cukup jelas atau tidak didukung oleh data yang tersedia."
+
+Jika pertanyaan LOLOS aturan di atas, baru lanjut CoT:
 
 Tugas Anda:
 1. ANALISIS: Cek apakah pertanyaan user mengandung kata di "KAMUS ISTILAH BISNIS". Jika YA, Anda WAJIB menggunakan "SQL Logic Wajib" yang tertera di sana.
@@ -298,7 +336,7 @@ Tugas Anda:
    - Jika TIDAK ADA: Hapus kolom itu dari query. JANGAN MENEBAK.
    - Jika RAG meminta kolom yang tidak ada di DDL: ABAIKAN RAG TERSEBUT. DDL ADALAH KEBENARAN MUTLAK.
 3. STRATEGI: Tentukan apakah perlu JOIN, GROUP BY, atau klausa WHERE khusus.
-4. EKSEKUSI: Tulis query SQL final di dalam blok markdown code.
+4. EKSEKUSI: Tulis query SQL final di dalam blok markdown code pastikan valid dan efisien.
 
 Format Jawaban Wajib:
 Penjelasan: <Jelaskan langkah berpikir Anda secara singkat di sini>
@@ -370,6 +408,10 @@ Pertanyaan Pengguna: "%s"
 
 	log.Println("SQL dari AI (Extracted):", sqlQuery)
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
+	sqlQuery = sanitizeSQL(sqlQuery)
+	if sqlQuery == "" {
+		return AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
+	}
 
 	return AISqlResponse{
 		SQL:        sqlQuery,
@@ -435,7 +477,9 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 		return nil, nil, fmt.Errorf("gagal call %s %s: %w", method, url, err)
 	}
 	defer func() {
-
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 	}()
 
 	respBody, readErr := io.ReadAll(resp.Body)
