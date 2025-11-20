@@ -95,6 +95,69 @@ func GetDynamicSchemaContext() ([]string, error) {
 	return contexts, nil
 }
 
+func GetDynamicReferenceData(ctx context.Context) (string, error) {
+	targetTables := map[string]string{
+		"master_status_rekening": "nama_status",
+		"master_jenis_rekening":  "nama_jenis",
+		"master_tipe_nasabah":    "nama_tipe",
+		"master_tipe_transaksi":  "nama_transaksi",
+	}
+
+	if DbInstance == nil {
+		return "", fmt.Errorf("koneksi database belum siap")
+	}
+
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return "", err
+	}
+
+	var builder strings.Builder
+	builder.WriteString("== LIVE DATA REFERENSI (Isi Tabel Master Terbaru) ==\n")
+	builder.WriteString("Gunakan ID/Kode di bawah ini secara TEPAT jika user bertanya tentang kategori ini:\n\n")
+
+	for tableName, nameCol := range targetTables {
+		idCol := "id"
+		switch tableName {
+		case "master_status_rekening":
+			idCol = "id_status_rekening"
+		case "master_jenis_rekening":
+			idCol = "id_jenis_rekening"
+		case "master_tipe_nasabah":
+			idCol = "id_tipe_nasabah"
+		case "master_tipe_transaksi":
+			idCol = "id_tipe_transaksi"
+		}
+		query := fmt.Sprintf("SELECT %s, %s FROM %s.%s ORDER BY %s ASC", idCol, nameCol, schema, tableName, idCol)
+
+		rows, err := DbInstance.QueryContext(ctx, query)
+		if err != nil {
+			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v", tableName, err)
+			continue
+		}
+
+		builder.WriteString(fmt.Sprintf("TABEL REFERENSI: '%s'\n", tableName))
+
+		counter := 0
+		for rows.Next() {
+			var id, nama string
+			if err := rows.Scan(&id, &nama); err != nil {
+				continue
+			}
+			builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
+			counter++
+		}
+		rows.Close()
+
+		if counter == 0 {
+			builder.WriteString("(Tabel kosong)\n")
+		}
+		builder.WriteString("\n")
+	}
+
+	return builder.String(), nil
+}
+
 func GetDynamicSqlExamples() ([]SqlExample, error) {
 	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
 	if DbInstance == nil {

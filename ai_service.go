@@ -169,131 +169,52 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
-	const SimilarityConfidenceThreshold = 0.5
+	const SimilarityConfidenceThreshold = 0.45
+	var sqlContext string
 
+	// Cek apakah kita dapat hasil RAG (Contekan)
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
 		log.Printf("🔍 Top RAG Score: %f", topResult.Score)
-
 		if topResult.Score < SimilarityConfidenceThreshold {
-			log.Println("⚠️ Prompt User Ambigu/Random. Memberikan saran...")
+			log.Println("⚠️ Score RAG rendah. Mengabaikan contoh RAG, beralih ke mode Zero-Shot dengan DDL & Referensi.")
+			sqlContext = "TIDAK ADA CONTOH SQL YANG RELEVAN. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL DAN DATA REFERENSI."
+		} else {
+			// Jika score bagus, rakit contekan
+			var contextBuilder strings.Builder
+			contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
 
-			seen := make(map[string]bool)
-			var suggestions []string
-
-			addSuggestion := func(s string) {
-				clean := s
-				if idx := strings.Index(strings.ToLower(clean), "pertanyaan:"); idx != -1 {
-					clean = clean[idx+len("pertanyaan:"):]
-				}
-				clean = strings.ReplaceAll(clean, "--", "")
-				clean = strings.ReplaceAll(clean, "\"", "")
-				clean = strings.TrimSpace(clean)
-				if clean == "" {
-					return
-				}
-				lower := strings.ToLower(clean)
-				if !seen[lower] {
-					suggestions = append(suggestions, clean)
-					seen[lower] = true
-				}
-			}
-
-			for _, item := range searchResponse {
-				if p := item.GetPayload(); p != nil {
-					if v, ok := p["prompt_preview"]; ok {
-						addSuggestion(v.GetStringValue())
-					} else if v, ok := p["content"]; ok {
-						fullContent := v.GetStringValue()
-						lines := strings.Split(fullContent, "\n")
-						if len(lines) > 0 {
-							clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
-							clean = strings.Replace(clean, "\"", "", -1)
-							addSuggestion(clean)
-						}
-					}
-				}
-				if len(suggestions) >= 3 {
-					break
-				}
-			}
-
-			if len(cacheResponse.Result) > 0 {
-				for _, item := range cacheResponse.Result {
-					if len(suggestions) >= 5 {
-						break
-					}
-
-					if val, ok := item.Payload["prompt_asli"]; ok {
-						if promptStr, ok := val.(string); ok {
-							addSuggestion(promptStr)
+			seenContents := make(map[string]bool)
+			for _, point := range searchResponse {
+				if p := point.GetPayload(); p != nil {
+					if v, ok := p["content"]; ok {
+						contekan := v.GetStringValue()
+						if contekan != "" && !seenContents[contekan] {
+							seenContents[contekan] = true
+							contextBuilder.WriteString(contekan)
+							contextBuilder.WriteString("\n---\n")
 						}
 					}
 				}
 			}
-			if len(suggestions) < 5 {
-				for _, item := range searchResponse {
-					if len(suggestions) >= 5 {
-						break
-					}
-
-					if p := item.GetPayload(); p != nil {
-						if v, ok := p["prompt_preview"]; ok {
-							addSuggestion(v.GetStringValue())
-						} else if v, ok := p["content"]; ok {
-							fullContent := v.GetStringValue()
-							lines := strings.Split(fullContent, "\n")
-							if len(lines) > 0 {
-								clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
-								clean = strings.Replace(clean, "\"", "", -1)
-								addSuggestion(clean)
-							}
-						}
-					}
-				}
-			}
-
-			return AISqlResponse{
-				IsAmbiguous: true,
-				Suggestions: suggestions,
-				PromptAsli:  userPrompt,
-			}, nil
+			log.Println("✅ Konteks RAG (Contekan) berhasil dirakit.")
+			sqlContext = contextBuilder.String()
 		}
 	} else {
-		return AISqlResponse{
-			IsAmbiguous: true,
-			Suggestions: []string{"Tidak ada data yang mirip. Coba gunakan kata kunci yang lebih spesifik."},
-			PromptAsli:  userPrompt,
-		}, nil
+		sqlContext = "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL."
 	}
 
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
-
-	seenContents := make(map[string]bool)
-
-	for _, point := range searchResponse {
-		if p := point.GetPayload(); p != nil {
-			if v, ok := p["content"]; ok {
-				contekan := v.GetStringValue()
-				if contekan != "" && !seenContents[contekan] {
-					seenContents[contekan] = true
-					contextBuilder.WriteString(contekan)
-					contextBuilder.WriteString("\n---\n")
-				}
-			}
-		}
-	}
-	log.Println("Konteks RAG Dinamis berhasil dirakit.")
-	contextContent := contextBuilder.String()
-	log.Printf("--- BUKTI PERAKITAN RAG (Konteks) ---\n%s\n--------------------------------------", contextContent)
-	sqlContext := contextBuilder.String()
 	allDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
-		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis untuk prompt: %w", err)
+		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
 	}
 	allDDLString := strings.Join(allDDLs, "\n---\n")
 
+	refDataString, err := GetDynamicReferenceData(ctx)
+	if err != nil {
+		log.Println("Warning: Gagal ambil data referensi:", err)
+		refDataString = "(Data referensi tidak tersedia)"
+	}
 	businessDict, err := GetBusinessDictionary(ctx)
 	if err != nil {
 		log.Println("Warning: Gagal ambil dictionary:", err)
@@ -301,55 +222,41 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 
 	finalPrompt := fmt.Sprintf(`
-Anda adalah ahli SQL PostgreSQL senior yang sangat hati-hati dan akurat. Tanggal hari ini (CURRENT_DATE) adalah %s.
-== KAMUS BISNIS ==
-%s
-== KAMUS DATABASE (SEMUA DDL) ==
-Berikut adalah DDL LENGKAP. JANGAN halusinasi kolom/tabel di luar ini:
-%s
+Anda adalah ahli SQL PostgreSQL senior. Tanggal hari ini: %s.
 
-== CONTOH SQL (PALING RELEVAN) ==
+== 1. KAMUS DATA (DDL & STRUKTUR) ==
+Baca DDL ini dengan teliti. Perhatikan KOMENTAR (-- ...) di setiap kolom untuk memahami artinya.
 %s
 
-ATURAN KERAS (WAJIB DIPATUHI 100%% TANPA Pengecualian):
+== 2. LIVE DATA REFERENSI (PENTING: JANGAN MENEBAK ID) ==
+Gunakan ID yang tertera di sini jika query membutuhkan filter berdasarkan Status, Tipe, atau Kategori.
+JANGAN MENGARANG ID SENDIRI.
+%s
 
-1. Jika pertanyaan user TIDAK BERHUBUNGAN dengan data bank (nasabah, rekening, transaksi, saldo, tipe nasabah, dll) → 
-   JAWAB LANGSUNG: "Maaf, pertanyaan tersebut tidak dapat dijawab karena tidak ada data terkait di sistem bank."
-   DAN JANGAN TULIS SQL SAMA SEKALI.
+== 3. KAMUS ISTILAH BISNIS ==
+%s
 
-2. Jika pertanyaan meminta data yang tidak ada di DDL (misal warna, hobi, zodiac, makanan kesukaan, cuaca, dll) →
-   JAWAB LANGSUNG: "Maaf, tidak ada kolom atau data terkait tersebut di database."
-   DAN JANGAN TULIS SQL.
+== 4. CONTOH SQL (RAG CONTEXT) ==
+%s
 
-3. Hanya generate SQL jika pertanyaan jelas berhubungan dengan tabel yang ada di DDL dan bisa dijawab dengan data yang ada.
+== ATURAN PENULISAN SQL (ZERO-SHOT & RAG) ==
+1. **Priority Reference**: Jika user menyebut "Tabungan", "Deposito", "Aktif", atau "Tutup", WAJIB cek bagian "LIVE DATA REFERENSI" untuk mendapatkan ID yang tepat. Jangan menebak "1" atau "0".
+2. **Column Validation**: Hanya gunakan kolom yang ADA di DDL di atas.
+3. **Security**: Hanya SELECT. Dilarang INSERT/UPDATE/DELETE.
 
-4. Jika ragu → tolak dan jawab: "Maaf, pertanyaan tidak cukup jelas atau tidak didukung oleh data yang tersedia."
-
-Jika pertanyaan LOLOS aturan di atas, baru lanjut CoT:
-
-Tugas Anda:
-1. ANALISIS: Cek apakah pertanyaan user mengandung kata di "KAMUS ISTILAH BISNIS". Jika YA, Anda WAJIB menggunakan "SQL Logic Wajib" yang tertera di sana.
-2.VALIDASI KOLOM (CRITICAL / WAJIB): 
-   - Sebelum menulis query, BACA ULANG "DDL" di atas.
-   - Cek setiap kolom yang ingin Anda panggil.
-   - APAKAH KOLOM ITU ADA DI DDL?
-   - Jika TIDAK ADA: Hapus kolom itu dari query. JANGAN MENEBAK.
-   - Jika RAG meminta kolom yang tidak ada di DDL: ABAIKAN RAG TERSEBUT. DDL ADALAH KEBENARAN MUTLAK.
-3. STRATEGI: Tentukan apakah perlu JOIN, GROUP BY, atau klausa WHERE khusus.
-4. EKSEKUSI: Tulis query SQL final di dalam blok markdown code pastikan valid dan efisien.
-
-Format Jawaban Wajib:
-Penjelasan: <Jelaskan langkah berpikir Anda secara singkat di sini>
-
-`+"```sql"+`
-<Tulis Query SQL Di Sini>
-`+"```"+`
+== TUGAS ANDA (CHAIN OF THOUGHT) ==
+Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat:
+1. **Analisis Intent**: Apa data yang dicari user?
+2. **Mapping Referensi**: Apakah ada kata kunci (misal: "blokir") yang perlu dicari ID-nya di "LIVE DATA REFERENSI"? Jika ada, sebutkan ID-nya.
+3. **Strategi Query**: Table mana yang di-JOIN? Apa kondisi WHERE-nya?
+4. **SQL Final**: Tulis query dalam blok markdown code.
 
 Pertanyaan Pengguna: "%s"
 `,
 		time.Now().Format("2006-01-02"),
-		businessDict,
 		allDDLString,
+		refDataString,
+		businessDict,
 		sqlContext,
 		userPrompt,
 	)
