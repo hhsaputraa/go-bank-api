@@ -166,13 +166,21 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	collectionName := r.URL.Query().Get("collection")
 	if collectionName == "" {
 		respondWithError(w, http.StatusBadRequest, "Parameter 'collection' wajib diisi")
 		return
 	}
 
-	data, err := GetAllQdrantPoints(collectionName, 100)
+	data, err := GetAllQdrantPoints(collectionName, 1000)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -182,6 +190,15 @@ func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		respondWithError(w, http.StatusMethodNotAllowed, "Hanya POST yang diizinkan")
 		return
@@ -202,7 +219,7 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Panggil fungsi inject yang baru kita buat
+	// Panggil fungsi inject
 	if err := ManualInjectCache(req.Prompt, req.SQL); err != nil {
 		log.Printf("Gagal inject cache: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan ke cache: "+err.Error())
@@ -216,6 +233,14 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "PUT,OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
@@ -249,4 +274,63 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 		"status":  "updated",
 		"message": fmt.Sprintf("Data ID %s berhasil diperbarui.", req.ID),
 	})
+}
+
+func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Collection string `json:"collection"`
+		ID         string `json:"id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == "" {
+		http.Error(w, "Parameter 'id' wajib diisi", http.StatusBadRequest)
+		return
+	}
+
+	targetCollection := req.Collection
+	if targetCollection == "" {
+		if AppConfig != nil {
+			targetCollection = AppConfig.QdrantCacheCollection
+		} else {
+			targetCollection = "bpr_supra_cache"
+		}
+	}
+
+	log.Printf("Menerima request delete untuk ID: %s di Collection: %s", req.ID, targetCollection)
+
+	err := DeleteQdrantPoint(r.Context(), targetCollection, req.ID)
+	if err != nil {
+		log.Printf("Error deleting Qdrant point: %v", err)
+		http.Error(w, fmt.Sprintf("Gagal menghapus: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]string{
+		"status":     "success",
+		"message":    "Item berhasil dihapus permanen dari vector database.",
+		"id_deleted": req.ID,
+		"collection": targetCollection,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

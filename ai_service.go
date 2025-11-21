@@ -77,21 +77,31 @@ type GroqResponse struct {
 }
 
 func sanitizeSQL(sql string) string {
-	lower := strings.ToLower(sql)
+	lines := strings.Split(sql, "\n")
+	var cleanLines []string
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "--") {
+			continue
+		}
+		cleanLines = append(cleanLines, line)
+	}
+	cleanSql := strings.Join(cleanLines, "\n")
 
-	// Blokir DML (insert/update/delete)
+	lower := strings.ToLower(cleanSql)
+
 	if strings.Contains(lower, "insert") || strings.Contains(lower, "update") ||
 		strings.Contains(lower, "delete") || strings.Contains(lower, "drop") ||
-		strings.Contains(lower, "alter") || strings.Contains(lower, "create") {
-		return "" // Return kosong → handler akan tangkap sebagai EMPTY_SQL
+		strings.Contains(lower, "alter") || strings.Contains(lower, "create") ||
+		strings.Contains(lower, "truncate") {
+		return ""
 	}
 
-	// Pastikan mulai dengan SELECT
 	if !strings.HasPrefix(strings.TrimSpace(lower), "select") {
 		return ""
 	}
 
-	return sql
+	return cleanSql
 }
 
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
@@ -639,5 +649,30 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 	}
 
 	log.Printf("✅ MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
+	return nil
+}
+
+type qdrantDeletePointsReq struct {
+	Points []string `json:"points"`
+}
+
+func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
+	baseURL := getQdrantBaseURL()
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", baseURL, collectionName)
+
+	reqPayload := qdrantDeletePointsReq{
+		Points: []string{pointID},
+	}
+
+	resp, body, err := httpDoJSON(ctx, http.MethodPost, url, reqPayload)
+	if err != nil {
+		return fmt.Errorf("gagal request ke qdrant: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gagal delete qdrant status %d: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("Berhasil menghapus Point ID '%s' dari collection '%s'", pointID, collectionName)
 	return nil
 }
