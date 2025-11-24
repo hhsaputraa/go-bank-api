@@ -641,7 +641,6 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 		},
 	}
 
-	// 3. Simpan langsung ke Collection Cache
 	ctx := context.Background()
 	err = qdrantUpsertPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{point})
 	if err != nil {

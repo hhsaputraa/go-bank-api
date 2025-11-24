@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -72,32 +73,25 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// === AMBIGUOUS DARI RAG ===
 	if aiResp.IsAmbiguous {
 		sendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
 		return
 	}
-
-	// === SQL KOSONG ===
 	if strings.TrimSpace(aiResp.SQL) == "" {
 		sendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
 		return
 	}
 
 	log.Printf("SQL yang akan dieksekusi: %s", aiResp.SQL)
-
-	// === EKSEKUSI QUERY ===
 	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
 	if execErr != nil {
 		log.Printf("GAGAL EKSEKUSI QUERY: %v | SQL: %s", execErr, aiResp.SQL)
-		// JANGAN SIMPAN KE CACHE KALAU GAGAL!
 		sendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
 			"Query tidak dapat dieksekusi. Mungkin syntax salah atau melanggar aturan database",
 			execErr.Error())
 		return
 	}
 
-	// === SUCCESS: Simpan ke cache kalau bukan dari cache ===
 	if !aiResp.IsCached {
 		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL) // async
 	}
@@ -189,6 +183,28 @@ func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, data)
 }
 
+func validateReadOnlySQL(query string) error {
+	q := strings.TrimSpace(strings.ToUpper(query))
+
+	if !strings.HasPrefix(q, "SELECT") && !strings.HasPrefix(q, "WITH") {
+		return fmt.Errorf("query harus dimulai dengan SELECT atau WITH")
+	}
+	dangerousKeywords := []string{
+		"DROP", "DELETE", "INSERT", "UPDATE",
+		"ALTER", "TRUNCATE", "CREATE", "GRANT", "REVOKE",
+	}
+
+	pattern := `\b(` + strings.Join(dangerousKeywords, "|") + `)\b`
+	re := regexp.MustCompile(pattern)
+
+	if re.MatchString(q) {
+
+		return fmt.Errorf("query mengandung kata kunci terlarang: %s", re.FindString(q))
+	}
+
+	return nil
+}
+
 func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
@@ -219,7 +235,12 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Panggil fungsi inject
+	if err := validateReadOnlySQL(req.SQL); err != nil {
+		log.Printf("⚠️ Percobaan inject query berbahaya: %s", req.SQL)
+		respondWithError(w, http.StatusBadRequest, "SQL Ditolak: "+err.Error())
+		return
+	}
+
 	if err := ManualInjectCache(req.Prompt, req.SQL); err != nil {
 		log.Printf("Gagal inject cache: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan ke cache: "+err.Error())
@@ -258,13 +279,21 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validasi input
 	if req.Collection == "" || req.ID == "" || req.Prompt == "" || req.SQL == "" {
 		respondWithError(w, http.StatusBadRequest, "Field 'collection', 'id', 'prompt', dan 'sql' wajib diisi semua!")
 		return
 	}
 
-	// Panggil fungsi update
+	if strings.Contains(req.Collection, "cache") {
+		if err := validateReadOnlySQL(req.SQL); err != nil {
+
+			log.Printf("⚠️ SECURITY ALERT: Percobaan update query berbahaya pada ID %s. Query: %s", req.ID, req.SQL)
+
+			respondWithError(w, http.StatusBadRequest, "SQL Ditolak: "+err.Error())
+			return
+		}
+	}
+
 	if err := UpdateQdrantPoint(req.Collection, req.ID, req.Prompt, req.SQL); err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
