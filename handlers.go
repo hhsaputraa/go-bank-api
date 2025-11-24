@@ -24,6 +24,24 @@ func HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, map[string]string{"status": "API is up and running!"})
 }
 
+func validateDangerousIntent(prompt string) error {
+	dangerousKeywords := []string{
+		"hapus", "delete", "drop", "remove",
+		"ubah", "update", "ganti", "edit", "alter", "modify",
+		"tambah", "insert", "create", "add",
+		"truncate", "grant", "revoke",
+	}
+	pattern := `\b(` + strings.Join(dangerousKeywords, "|") + `)\b`
+	re := regexp.MustCompile(pattern)
+
+	if re.MatchString(prompt) {
+		match := re.FindString(prompt)
+		return fmt.Errorf("permintaan ditolak: mengandung kata kunci manipulasi '%s'. ", match)
+	}
+
+	return nil
+}
+
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -37,8 +55,6 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
 		return
 	}
-
-	// Decode request
 	var req PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "INVALID_JSON", "Format JSON tidak valid")
@@ -64,8 +80,12 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if err := validateDangerousIntent(normalizedPrompt); err != nil {
+		log.Printf("SECURITY BLOCK: %v", err)
+		sendError(w, http.StatusForbidden, "DANGEROUS_INTENT", err.Error())
+		return
+	}
 
-	// === CALL AI ===
 	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
 		log.Printf("AI gagal generate SQL: %v", err)
@@ -93,10 +113,9 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !aiResp.IsCached {
-		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL) // async
+		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
 	}
 
-	// === RESPON SUCCESS ===
 	sendSuccess(w, data)
 }
 
@@ -150,12 +169,12 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 	log.Println("ADMIN: Menerima permintaan /admin/retrain...")
 
 	go func() {
-		log.Println("ADMIN: Proses retraining RAG (Embedding) dimulai di background...")
+		log.Println("ADMIN: training RAG (Embedding) dimulai")
 		mainTrain()
 	}()
 
 	respondWithJSON(w, http.StatusAccepted, map[string]string{
-		"message": "Proses retraining RAG telah dimulai di background. Periksa log server untuk status.",
+		"message": "Proses retraining RAG telah selesai",
 	})
 }
 

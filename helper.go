@@ -23,7 +23,7 @@ func sendAmbiguous(w http.ResponseWriter, message string, suggestions []string) 
 		Suggestions: suggestions,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK) // tetap 200 supaya frontend gampang handle
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
 }
 

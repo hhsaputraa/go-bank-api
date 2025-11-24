@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
@@ -12,14 +13,12 @@ import (
 )
 
 func mainTrain() {
-	log.Println("Memulai proses 'Training' Database Vektor...")
+	log.Println("Memulai proses Training Pengetahuan")
 
-	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("⚠️Error memuat .env: %v", err)
 	}
 
-	// Load configuration
 	_, err := LoadConfig()
 	if err != nil {
 		log.Fatalf("⚠️Error memuat konfigurasi: %v", err)
@@ -41,13 +40,18 @@ func mainTrain() {
 	}
 	defer geminiClient.Close()
 	embedder := geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
+	log.Printf("agar bersih...", AppConfig.QdrantCollectionName)
+	if err := qdrantDeleteCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName); err != nil {
+		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)
+	}
+	time.Sleep(3 * time.Second)
 	log.Printf("Koneksi 'Penerjemah' (Google AI)... OK. Model: %s", AppConfig.EmbeddingModel)
 
 	// Create/recreate Qdrant collection
-	log.Printf("Membuat koleksi baru '%s'...", AppConfig.QdrantCollectionName)
+	log.Printf("🆕 Membuat ulang koleksi '%s'...", AppConfig.QdrantCollectionName)
 	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
 		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
-		log.Fatalf("Gagal membuat koleksi di Qdrant: %v", err)
+		log.Fatalf("❌ Gagal membuat koleksi di Qdrant: %v", err)
 	}
 
 	log.Println("Mulai 'melatih' (meng-embed dan menyimpan) contekan...")
@@ -84,7 +88,6 @@ func mainTrain() {
 		points = append(points, point)
 	}
 
-	// B. PROSES SQL EXAMPLES (Label: "sql")
 	log.Printf("Memproses %d Contoh SQL...", len(dynamicSQLExamples))
 	for i, item := range dynamicSQLExamples {
 		cleanPrompt := item.PromptOnly

@@ -675,3 +675,18 @@ func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID strin
 	log.Printf("Berhasil menghapus Point ID '%s' dari collection '%s'", pointID, collectionName)
 	return nil
 }
+func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
+	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
+
+	resp, body, err := httpDoJSON(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		log.Printf("✅ Collection '%s' berhasil dihapus (atau belum ada).", name)
+		return nil
+	}
+
+	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
+}
