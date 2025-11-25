@@ -181,8 +181,6 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 	const SimilarityConfidenceThreshold = 0.45
 	var sqlContext string
-
-	// Cek apakah kita dapat hasil RAG (Contekan)
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
 		log.Printf("🔍 Top RAG Score: %f", topResult.Score)
@@ -271,43 +269,94 @@ Pertanyaan Pengguna: "%s"
 		userPrompt,
 	)
 
-	groqReqBody := GroqRequest{
-		Model:       AppConfig.GroqModel,
-		Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
-		Temperature: 0,
-	}
-	jsonBody, err := json.Marshal(groqReqBody)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: AppConfig.GroqTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	defer resp.Body.Close()
-	respBodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return AISqlResponse{}, fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
-	}
-	var groqResp GroqResponse
-	if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
-		return AISqlResponse{}, err
-	}
-	if len(groqResp.Choices) == 0 {
-		return AISqlResponse{}, errors.New("AI tidak memberikan balasan")
+	var rawContent string
+	var ollamaSuccess bool = false
+
+	if AppConfig != nil && AppConfig.OllamaURL != "" {
+		log.Printf("🔄 Mencoba Ollama LLM lokal: %s (model=%s)", AppConfig.OllamaURL, AppConfig.OllamaModel)
+
+		ollamaReq := map[string]any{
+			"model":  AppConfig.OllamaModel,
+			"prompt": finalPrompt,
+			"stream": false,
+		}
+
+		resp, respBodyBytes, errOllama := httpDoJSON(ctx, "POST", strings.TrimRight(AppConfig.OllamaURL, "/")+"/api/generate", ollamaReq)
+
+		if errOllama != nil {
+			log.Printf("⚠️ Gagal koneksi ke Ollama: %v. Akan beralih ke Groq.", errOllama)
+		} else if resp.StatusCode != http.StatusOK {
+			log.Printf("⚠️ Ollama error status %d: %s. Akan beralih ke Groq.", resp.StatusCode, string(respBodyBytes))
+		} else {
+			var ollamaResp map[string]any
+			if err := json.Unmarshal(respBodyBytes, &ollamaResp); err == nil {
+				if r, ok := ollamaResp["response"].(string); ok {
+					rawContent = r
+				} else if t, ok := ollamaResp["text"].(string); ok {
+					rawContent = t
+				} else if gens, ok := ollamaResp["generations"].([]any); ok && len(gens) > 0 {
+					if first, ok := gens[0].(map[string]any); ok {
+						if c, ok := first["content"].(string); ok {
+							rawContent = c
+						}
+					}
+				}
+			}
+
+			if rawContent != "" {
+				ollamaSuccess = true
+				log.Println("✅ Sukses mendapatkan respon dari Ollama.")
+			} else {
+				log.Println("⚠️ Respon Ollama kosong/format salah. Beralih ke Groq...")
+			}
+		}
 	}
 
-	rawContent := groqResp.Choices[0].Message.Content
+	if !ollamaSuccess {
+		log.Println("Menggunakan Layanan Groq AI...")
+
+		groqReqBody := GroqRequest{
+			Model:       AppConfig.GroqModel,
+			Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
+			Temperature: 0,
+		}
+		jsonBody, err := json.Marshal(groqReqBody)
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+
+		req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+		req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: AppConfig.GroqTimeout}
+		resp, err := client.Do(req)
+		if err != nil {
+			return AISqlResponse{}, fmt.Errorf("gagal memanggil Groq (dan Ollama juga gagal): %w", err)
+		}
+		defer resp.Body.Close()
+
+		respBodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return AISqlResponse{}, fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
+		}
+
+		var groqResp GroqResponse
+		if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
+			return AISqlResponse{}, err
+		}
+		if len(groqResp.Choices) == 0 {
+			return AISqlResponse{}, errors.New("AI Groq tidak memberikan balasan")
+		}
+
+		rawContent = groqResp.Choices[0].Message.Content
+	}
 	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
 	re := regexp.MustCompile("(?s)```sql(.*?)```")
 	match := re.FindStringSubmatch(rawContent)

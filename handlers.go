@@ -74,7 +74,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
 		return
 	} else if isAbsurd {
-		sendAmbiguous(w, "Pertanyaan tidak dapat diproses karena tidak relevan dengan data perbankan", []string{
+		sendAmbiguous(w, "Pertanyaan tidak relevan", []string{
 			"ada berapa orang penabung saat ini",
 			"nasabah yang jenis tabungan nya deposito",
 		})
