@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,6 +74,34 @@ type GroqResponse struct {
 	Choices []struct {
 		Message GroqMessage `json:"message"`
 	} `json:"choices"`
+}
+
+func sanitizeSQL(sql string) string {
+	lines := strings.Split(sql, "\n")
+	var cleanLines []string
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "--") {
+			continue
+		}
+		cleanLines = append(cleanLines, line)
+	}
+	cleanSql := strings.Join(cleanLines, "\n")
+
+	lower := strings.ToLower(cleanSql)
+
+	if strings.Contains(lower, "insert") || strings.Contains(lower, "update") ||
+		strings.Contains(lower, "delete") || strings.Contains(lower, "drop") ||
+		strings.Contains(lower, "alter") || strings.Contains(lower, "create") ||
+		strings.Contains(lower, "truncate") {
+		return ""
+	}
+
+	if !strings.HasPrefix(strings.TrimSpace(lower), "select") {
+		return ""
+	}
+
+	return cleanSql
 }
 
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
@@ -150,192 +179,205 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if err != nil {
 		return AISqlResponse{}, fmt.Errorf("gagal mencari RAG di Qdrant: %w", err)
 	}
-	const SimilarityConfidenceThreshold = 0.72
-
+	const SimilarityConfidenceThreshold = 0.45
+	var sqlContext string
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
 		log.Printf("🔍 Top RAG Score: %f", topResult.Score)
-
 		if topResult.Score < SimilarityConfidenceThreshold {
-			log.Println("⚠️ Prompt User Ambigu/Random. Memberikan saran...")
+			log.Println("⚠️ Score RAG rendah. Mengabaikan contoh RAG, beralih ke mode Zero-Shot dengan DDL & Referensi.")
+			sqlContext = "TIDAK ADA CONTOH SQL YANG RELEVAN. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL DAN DATA REFERENSI."
+		} else {
+			// Jika score bagus, rakit contekan
+			var contextBuilder strings.Builder
+			contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
 
-			seen := make(map[string]bool)
-			var suggestions []string
-
-			addSuggestion := func(s string) {
-				clean := s
-				if idx := strings.Index(strings.ToLower(clean), "pertanyaan:"); idx != -1 {
-					clean = clean[idx+len("pertanyaan:"):]
-				}
-				clean = strings.ReplaceAll(clean, "--", "")
-				clean = strings.ReplaceAll(clean, "\"", "")
-				clean = strings.TrimSpace(clean)
-				if clean == "" {
-					return
-				}
-				lower := strings.ToLower(clean)
-				if !seen[lower] {
-					suggestions = append(suggestions, clean)
-					seen[lower] = true
-				}
-			}
-
-			for _, item := range searchResponse {
-				if p := item.GetPayload(); p != nil {
-					if v, ok := p["prompt_preview"]; ok {
-						addSuggestion(v.GetStringValue())
-					} else if v, ok := p["content"]; ok {
-						fullContent := v.GetStringValue()
-						lines := strings.Split(fullContent, "\n")
-						if len(lines) > 0 {
-							clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
-							clean = strings.Replace(clean, "\"", "", -1)
-							addSuggestion(clean)
-						}
-					}
-				}
-				if len(suggestions) >= 3 {
-					break
-				}
-			}
-
-			if len(cacheResponse.Result) > 0 {
-				for _, item := range cacheResponse.Result {
-					if len(suggestions) >= 5 {
-						break
-					}
-
-					if val, ok := item.Payload["prompt_asli"]; ok {
-						if promptStr, ok := val.(string); ok {
-							addSuggestion(promptStr)
+			seenContents := make(map[string]bool)
+			for _, point := range searchResponse {
+				if p := point.GetPayload(); p != nil {
+					if v, ok := p["content"]; ok {
+						contekan := v.GetStringValue()
+						if contekan != "" && !seenContents[contekan] {
+							seenContents[contekan] = true
+							contextBuilder.WriteString(contekan)
+							contextBuilder.WriteString("\n---\n")
 						}
 					}
 				}
 			}
-			if len(suggestions) < 5 {
-				for _, item := range searchResponse {
-					if len(suggestions) >= 5 {
-						break
-					}
-
-					if p := item.GetPayload(); p != nil {
-						if v, ok := p["prompt_preview"]; ok {
-							addSuggestion(v.GetStringValue())
-						} else if v, ok := p["content"]; ok {
-							fullContent := v.GetStringValue()
-							lines := strings.Split(fullContent, "\n")
-							if len(lines) > 0 {
-								clean := strings.Replace(lines[0], "-- Pertanyaan: ", "", 1)
-								clean = strings.Replace(clean, "\"", "", -1)
-								addSuggestion(clean)
-							}
-						}
-					}
-				}
-			}
-
-			return AISqlResponse{
-				IsAmbiguous: true,
-				Suggestions: suggestions,
-				PromptAsli:  userPrompt,
-			}, nil
+			log.Println("✅ Konteks RAG (Contekan) berhasil dirakit.")
+			sqlContext = contextBuilder.String()
 		}
 	} else {
-		return AISqlResponse{
-			IsAmbiguous: true,
-			Suggestions: []string{"Tidak ada data yang mirip. Coba gunakan kata kunci yang lebih spesifik."},
-			PromptAsli:  userPrompt,
-		}, nil
+		sqlContext = "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL."
 	}
 
-	var contextBuilder strings.Builder
-	contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
-	for _, point := range searchResponse {
-		if p := point.GetPayload(); p != nil {
-			if v, ok := p["content"]; ok {
-				contekan := v.GetStringValue()
-				if contekan != "" {
-					contextBuilder.WriteString(contekan)
-					contextBuilder.WriteString("\n---\n")
-				}
-			}
-		}
-	}
-	log.Println("Konteks RAG Dinamis berhasil dirakit.")
-	contextContent := contextBuilder.String()
-	log.Printf("--- BUKTI PERAKITAN RAG (Konteks) ---\n%s\n--------------------------------------", contextContent)
-	sqlContext := contextBuilder.String()
 	allDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
-		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis untuk prompt: %w", err)
+		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
 	}
 	allDDLString := strings.Join(allDDLs, "\n---\n")
 
+	refDataString, err := GetDynamicReferenceData(ctx)
+	if err != nil {
+		log.Println("Warning: Gagal ambil data referensi:", err)
+		refDataString = "(Data referensi tidak tersedia)"
+	}
+	businessDict, err := GetBusinessDictionary(ctx)
+	if err != nil {
+		log.Println("Warning: Gagal ambil dictionary:", err)
+		businessDict = ""
+	}
+
 	finalPrompt := fmt.Sprintf(`
-Anda adalah ahli SQL PostgreSQL. Tanggal hari ini (CURRENT_DATE) adalah %s.
+Anda adalah ahli SQL PostgreSQL senior. Tanggal hari ini: %s.
 
-== KAMUS DATABASE (SEMUA DDL) ==
-Berikut adalah DDL LENGKAP untuk skema "bpr_supra". JANGAN halusinasi kolom/tabel di luar ini:
+== 1. KAMUS DATA (DDL & STRUKTUR) ==
+Baca DDL ini dengan teliti. Perhatikan KOMENTAR (-- ...) di setiap kolom untuk memahami artinya.
 %s
 
-== CONTOH SQL (PALING RELEVAN) ==
-Berikut adalah CONTOH SQL yang relevan dengan pertanyaan user:
+== 2. LIVE DATA REFERENSI (PENTING: JANGAN MENEBAK ID) ==
+Gunakan ID yang tertera di sini jika query membutuhkan filter berdasarkan Status, Tipe, atau Kategori.
+JANGAN MENGARANG ID SENDIRI.
 %s
 
-Tugas Anda:
-1. Berdasarkan "KAMUS DATABASE" di atas, jawab pertanyaan pengguna.
-2. Gunakan "CONTOH SQL" sebagai inspirasi pola.
-3. JANGAN pakai markdown (sql). JANGAN tambahkan penjelasan. Hanya SQL.
-4. JANGAN PERNAH menggunakan SELECT *; selalu sebutkan nama kolomnya.
+== 3. KAMUS ISTILAH BISNIS ==
+%s
+
+== 4. CONTOH SQL (RAG CONTEXT) ==
+%s
+
+== ATURAN PENULISAN SQL (ZERO-SHOT & RAG) ==
+1. **Priority Reference**: Jika user menyebut "Tabungan", "Deposito", "Aktif", atau "Tutup", WAJIB cek bagian "LIVE DATA REFERENSI" untuk mendapatkan ID yang tepat. Jangan menebak "1" atau "0".
+2. **Column Validation**: Hanya gunakan kolom yang ADA di DDL di atas.
+3. **Security**: Hanya SELECT. Dilarang INSERT/UPDATE/DELETE.
+
+== TUGAS ANDA (CHAIN OF THOUGHT) ==
+Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat:
+1. **Analisis Intent**: Apa data yang dicari user?
+2. **Mapping Referensi**: Apakah ada kata kunci (misal: "blokir") yang perlu dicari ID-nya di "LIVE DATA REFERENSI"? Jika ada, sebutkan ID-nya.
+3. **Strategi Query**: Table mana yang di-JOIN? Apa kondisi WHERE-nya?
+4. **SQL Final**: Tulis query dalam blok markdown code.
 
 Pertanyaan Pengguna: "%s"
-
-Query SQL:`,
+`,
 		time.Now().Format("2006-01-02"),
 		allDDLString,
+		refDataString,
+		businessDict,
 		sqlContext,
 		userPrompt,
 	)
 
-	groqReqBody := GroqRequest{
-		Model:       AppConfig.GroqModel,
-		Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
-		Temperature: 0,
-	}
-	jsonBody, err := json.Marshal(groqReqBody)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: AppConfig.GroqTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	defer resp.Body.Close()
-	respBodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return AISqlResponse{}, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return AISqlResponse{}, fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
-	}
-	var groqResp GroqResponse
-	if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
-		return AISqlResponse{}, err
-	}
-	if len(groqResp.Choices) == 0 {
-		return AISqlResponse{}, errors.New("AI tidak memberikan balasan")
+	var rawContent string
+	var ollamaSuccess bool = false
+
+	if AppConfig != nil && AppConfig.OllamaURL != "" {
+		log.Printf("🔄 Mencoba Ollama LLM lokal: %s (model=%s)", AppConfig.OllamaURL, AppConfig.OllamaModel)
+
+		ollamaReq := map[string]any{
+			"model":  AppConfig.OllamaModel,
+			"prompt": finalPrompt,
+			"stream": false,
+		}
+
+		resp, respBodyBytes, errOllama := httpDoJSON(ctx, "POST", strings.TrimRight(AppConfig.OllamaURL, "/")+"/api/generate", ollamaReq)
+
+		if errOllama != nil {
+			log.Printf("⚠️ Gagal koneksi ke Ollama: %v. Akan beralih ke Groq.", errOllama)
+		} else if resp.StatusCode != http.StatusOK {
+			log.Printf("⚠️ Ollama error status %d: %s. Akan beralih ke Groq.", resp.StatusCode, string(respBodyBytes))
+		} else {
+			var ollamaResp map[string]any
+			if err := json.Unmarshal(respBodyBytes, &ollamaResp); err == nil {
+				if r, ok := ollamaResp["response"].(string); ok {
+					rawContent = r
+				} else if t, ok := ollamaResp["text"].(string); ok {
+					rawContent = t
+				} else if gens, ok := ollamaResp["generations"].([]any); ok && len(gens) > 0 {
+					if first, ok := gens[0].(map[string]any); ok {
+						if c, ok := first["content"].(string); ok {
+							rawContent = c
+						}
+					}
+				}
+			}
+
+			if rawContent != "" {
+				ollamaSuccess = true
+				log.Println("✅ Sukses mendapatkan respon dari Ollama.")
+			} else {
+				log.Println("⚠️ Respon Ollama kosong/format salah. Beralih ke Groq...")
+			}
+		}
 	}
 
-	sqlQuery := strings.TrimSpace(groqResp.Choices[0].Message.Content)
-	sqlQuery = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(sqlQuery, "```sql"), "```"))
+	if !ollamaSuccess {
+		log.Println("Menggunakan Layanan Groq AI...")
+
+		groqReqBody := GroqRequest{
+			Model:       AppConfig.GroqModel,
+			Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
+			Temperature: 0,
+		}
+		jsonBody, err := json.Marshal(groqReqBody)
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+
+		req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+		req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: AppConfig.GroqTimeout}
+		resp, err := client.Do(req)
+		if err != nil {
+			return AISqlResponse{}, fmt.Errorf("gagal memanggil Groq (dan Ollama juga gagal): %w", err)
+		}
+		defer resp.Body.Close()
+
+		respBodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return AISqlResponse{}, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return AISqlResponse{}, fmt.Errorf("Groq merespon dengan error: %s", string(respBodyBytes))
+		}
+
+		var groqResp GroqResponse
+		if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
+			return AISqlResponse{}, err
+		}
+		if len(groqResp.Choices) == 0 {
+			return AISqlResponse{}, errors.New("AI Groq tidak memberikan balasan")
+		}
+
+		rawContent = groqResp.Choices[0].Message.Content
+	}
+	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
+	re := regexp.MustCompile("(?s)```sql(.*?)```")
+	match := re.FindStringSubmatch(rawContent)
+
+	var sqlQuery string
+	if len(match) > 1 {
+		sqlQuery = strings.TrimSpace(match[1])
+	} else {
+		log.Println("⚠️ AI tidak menggunakan format markdown SQL, mencoba membersihkan manual...")
+		sqlQuery = strings.TrimSpace(rawContent)
+		if idx := strings.Index(strings.ToLower(sqlQuery), "select"); idx != -1 {
+			sqlQuery = sqlQuery[idx:]
+		}
+	}
+
+	log.Println("SQL dari AI (Extracted):", sqlQuery)
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
+	sqlQuery = sanitizeSQL(sqlQuery)
+	if sqlQuery == "" {
+		return AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
+	}
 
 	return AISqlResponse{
 		SQL:        sqlQuery,
@@ -401,7 +443,9 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 		return nil, nil, fmt.Errorf("gagal call %s %s: %w", method, url, err)
 	}
 	defer func() {
-
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 	}()
 
 	respBody, readErr := io.ReadAll(resp.Body)
@@ -646,7 +690,6 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 		},
 	}
 
-	// 3. Simpan langsung ke Collection Cache
 	ctx := context.Background()
 	err = qdrantUpsertPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{point})
 	if err != nil {
@@ -655,4 +698,44 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 
 	log.Printf("✅ MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
 	return nil
+}
+
+type qdrantDeletePointsReq struct {
+	Points []string `json:"points"`
+}
+
+func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
+	baseURL := getQdrantBaseURL()
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", baseURL, collectionName)
+
+	reqPayload := qdrantDeletePointsReq{
+		Points: []string{pointID},
+	}
+
+	resp, body, err := httpDoJSON(ctx, http.MethodPost, url, reqPayload)
+	if err != nil {
+		return fmt.Errorf("gagal request ke qdrant: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gagal delete qdrant status %d: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("Berhasil menghapus Point ID '%s' dari collection '%s'", pointID, collectionName)
+	return nil
+}
+func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
+	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
+
+	resp, body, err := httpDoJSON(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		log.Printf("✅ Collection '%s' berhasil dihapus (atau belum ada).", name)
+		return nil
+	}
+
+	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
 }

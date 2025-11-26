@@ -95,6 +95,69 @@ func GetDynamicSchemaContext() ([]string, error) {
 	return contexts, nil
 }
 
+func GetDynamicReferenceData(ctx context.Context) (string, error) {
+	targetTables := map[string]string{
+		"master_status_rekening": "nama_status",
+		"master_jenis_rekening":  "nama_jenis",
+		"master_tipe_nasabah":    "nama_tipe",
+		"master_tipe_transaksi":  "nama_transaksi",
+	}
+
+	if DbInstance == nil {
+		return "", fmt.Errorf("koneksi database belum siap")
+	}
+
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return "", err
+	}
+
+	var builder strings.Builder
+	builder.WriteString("== LIVE DATA REFERENSI (Isi Tabel Master Terbaru) ==\n")
+	builder.WriteString("Gunakan ID/Kode di bawah ini secara TEPAT jika user bertanya tentang kategori ini:\n\n")
+
+	for tableName, nameCol := range targetTables {
+		idCol := "id"
+		switch tableName {
+		case "master_status_rekening":
+			idCol = "id_status_rekening"
+		case "master_jenis_rekening":
+			idCol = "id_jenis_rekening"
+		case "master_tipe_nasabah":
+			idCol = "id_tipe_nasabah"
+		case "master_tipe_transaksi":
+			idCol = "id_tipe_transaksi"
+		}
+		query := fmt.Sprintf("SELECT %s, %s FROM %s.%s ORDER BY %s ASC", idCol, nameCol, schema, tableName, idCol)
+
+		rows, err := DbInstance.QueryContext(ctx, query)
+		if err != nil {
+			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v", tableName, err)
+			continue
+		}
+
+		builder.WriteString(fmt.Sprintf("TABEL REFERENSI: '%s'\n", tableName))
+
+		counter := 0
+		for rows.Next() {
+			var id, nama string
+			if err := rows.Scan(&id, &nama); err != nil {
+				continue
+			}
+			builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
+			counter++
+		}
+		rows.Close()
+
+		if counter == 0 {
+			builder.WriteString("(Tabel kosong)\n")
+		}
+		builder.WriteString("\n")
+	}
+
+	return builder.String(), nil
+}
+
 func GetDynamicSqlExamples() ([]SqlExample, error) {
 	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
 	if DbInstance == nil {
@@ -176,4 +239,75 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 
 	log.Printf("✅ Berhasil! Menyimpan contekan baru ke 'rag_sql_examples' untuk prompt: %s", promptAsli)
 	return nil
+}
+
+type DictionaryItem struct {
+	Istilah   string
+	Definisi  string
+	LogikaSQL string
+}
+
+func GetBusinessDictionary(ctx context.Context) (string, error) {
+	rows, err := DbInstance.QueryContext(ctx, "SELECT istilah, definisi_bisnis, logika_sql FROM ai_dictionary")
+	if err != nil {
+		return "", nil
+	}
+	defer rows.Close()
+
+	var builder strings.Builder
+	builder.WriteString("== KAMUS ISTILAH BISNIS (PRIORITAS TINGGI) ==\n")
+	builder.WriteString("Gunakan logika ini jika user menyebut kata kunci berikut:\n")
+
+	for rows.Next() {
+		var d DictionaryItem
+		if err := rows.Scan(&d.Istilah, &d.Definisi, &d.LogikaSQL); err != nil {
+			return "", err
+		}
+		line := fmt.Sprintf("- \"%s\" bermakna: %s. (SQL Logic Wajib: `%s`)\n", d.Istilah, d.Definisi, d.LogikaSQL)
+		builder.WriteString(line)
+	}
+
+	return builder.String(), nil
+}
+
+type AbsurdKeyword struct {
+	Keyword  string
+	Category string
+	IsActive bool
+}
+
+func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
+	if DbInstance == nil {
+		return false, fmt.Errorf("koneksi database (DbInstance) belum siap")
+	}
+
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return false, fmt.Errorf("gagal mendapatkan schema: %w", err)
+	}
+
+	lowerPrompt := strings.ToLower(prompt)
+
+	query := fmt.Sprintf(`
+        SELECT EXISTS (
+            SELECT 1 
+            FROM %s.absurd_keywords 
+            WHERE is_active = true 
+              AND $1 ILIKE '%%' || keyword || '%%'
+            LIMIT 1
+        )
+    `, schema)
+
+	var exists bool
+	err = DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
+	if err != nil {
+		log.Printf("Error query absurd_keywords: %v", err)
+		return false, err
+	}
+
+	if exists {
+		log.Printf("Prompt terdeteksi absurd: '%s'", prompt)
+	}
+
+	return exists, nil
 }
