@@ -27,6 +27,10 @@ type Config struct {
 	EmbeddingModel      string
 	EmbeddingVectorSize int
 
+	// Ollama (local LLM)
+	OllamaURL   string
+	OllamaModel string
+
 	// Qdrant
 	QdrantGRPCHost        string
 	QdrantGRPCPort        int
@@ -77,6 +81,10 @@ func LoadConfig() (*Config, error) {
 		EmbeddingModel:      getEnv("EMBEDDING_MODEL", "models/text-embedding-004"),
 		EmbeddingVectorSize: getEnvAsInt("EMBEDDING_VECTOR_SIZE", 768),
 
+		// Ollama (local LLM)
+		OllamaURL:   getEnv("OLLAMA_URL", ""),
+		OllamaModel: getEnv("OLLAMA_MODEL", ""),
+
 		// Qdrant
 		QdrantGRPCHost:        getEnv("QDRANT_GRPC_HOST", ""),
 		QdrantGRPCPort:        getEnvAsInt("QDRANT_GRPC_PORT", 6334),
@@ -109,8 +117,9 @@ func LoadConfig() (*Config, error) {
 	if cfg.DBConnString == "" {
 		return nil, fmt.Errorf("DB_CONN_STRING is required")
 	}
-	if cfg.GroqAPIKey == "" {
-		return nil, fmt.Errorf("GROQ_API_KEY is required")
+	// At least one LLM endpoint required: Groq (remote) or Ollama (local)
+	if cfg.GroqAPIKey == "" && cfg.OllamaURL == "" {
+		return nil, fmt.Errorf("either GROQ_API_KEY (remote LLM) or OLLAMA_URL (local LLM) is required")
 	}
 	if cfg.GoogleAPIKey == "" {
 		return nil, fmt.Errorf("GOOGLE_API_KEY is required")

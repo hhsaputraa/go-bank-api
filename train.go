@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
@@ -11,14 +13,12 @@ import (
 )
 
 func mainTrain() {
-	log.Println("Memulai proses 'Training' Database Vektor...")
+	log.Println("Memulai proses Training Pengetahuan")
 
-	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Fatalf("⚠️Error memuat .env: %v", err)
 	}
 
-	// Load configuration
 	_, err := LoadConfig()
 	if err != nil {
 		log.Fatalf("⚠️Error memuat konfigurasi: %v", err)
@@ -40,13 +40,18 @@ func mainTrain() {
 	}
 	defer geminiClient.Close()
 	embedder := geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
+	log.Printf("agar bersih...", AppConfig.QdrantCollectionName)
+	if err := qdrantDeleteCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName); err != nil {
+		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)
+	}
+	time.Sleep(3 * time.Second)
 	log.Printf("Koneksi 'Penerjemah' (Google AI)... OK. Model: %s", AppConfig.EmbeddingModel)
 
 	// Create/recreate Qdrant collection
-	log.Printf("Membuat koleksi baru '%s'...", AppConfig.QdrantCollectionName)
+	log.Printf("🆕 Membuat ulang koleksi '%s'...", AppConfig.QdrantCollectionName)
 	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
 		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
-		log.Fatalf("Gagal membuat koleksi di Qdrant: %v", err)
+		log.Fatalf("❌ Gagal membuat koleksi di Qdrant: %v", err)
 	}
 
 	log.Println("Mulai 'melatih' (meng-embed dan menyimpan) contekan...")
@@ -83,11 +88,15 @@ func mainTrain() {
 		points = append(points, point)
 	}
 
-	// B. PROSES SQL EXAMPLES (Label: "sql")
 	log.Printf("Memproses %d Contoh SQL...", len(dynamicSQLExamples))
 	for i, item := range dynamicSQLExamples {
+		cleanPrompt := item.PromptOnly
+		cleanPrompt = strings.Replace(cleanPrompt, "-- Pertanyaan: ", "", 1) // Hapus prefix
+		cleanPrompt = strings.Replace(cleanPrompt, "\"", "", -1)             // Hapus tanda kutip
+		cleanPrompt = strings.TrimSpace(cleanPrompt)
+		log.Printf("Embedding Prompt Bersih: '%s'", cleanPrompt)
 
-		res, err := embedder.EmbedContent(ctx, genai.Text(item.FullContent)) // Asumsi struct baru
+		res, err := embedder.EmbedContent(ctx, genai.Text(cleanPrompt)) // Asumsi struct baru
 		if err != nil {
 			log.Printf("Skip SQL #%d: %v", i, err)
 			continue
@@ -97,8 +106,8 @@ func mainTrain() {
 			ID:     uuid.NewString(),
 			Vector: res.Embedding.Values,
 			Payload: map[string]interface{}{
-				"content":        item.FullContent, // Tetap simpan full untuk konteks LLM
-				"prompt_preview": item.PromptOnly,  // <--- TAMBAHAN PENTING: Simpan pertanyaan saja
+				"content":        item.FullContent,
+				"prompt_preview": cleanPrompt,
 				"category":       "sql",
 			},
 		}
