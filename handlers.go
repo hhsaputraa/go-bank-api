@@ -29,7 +29,7 @@ func validateDangerousIntent(prompt string) error {
 		"hapus", "delete", "drop", "remove",
 		"ubah", "update", "ganti", "edit", "alter", "modify",
 		"tambah", "insert", "create", "add",
-		"truncate", "grant", "revoke",
+		"truncate", "grant", "revoke", "rubah",
 	}
 	pattern := `\b(` + strings.Join(dangerousKeywords, "|") + `)\b`
 	re := regexp.MustCompile(pattern)
@@ -74,7 +74,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
 		return
 	} else if isAbsurd {
-		sendAmbiguous(w, "Pertanyaan tidak relevan", []string{
+		sendAmbiguous(w, "Pertanyaan kurang jelas", []string{
 			"ada berapa orang penabung saat ini",
 			"nasabah yang jenis tabungan nya deposito",
 		})
