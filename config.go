@@ -9,7 +9,7 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	// Database
+	// Database (Oracle)
 	DBConnString      string
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
@@ -115,7 +115,7 @@ func LoadConfig() (*Config, error) {
 
 	// Validate required fields
 	if cfg.DBConnString == "" {
-		return nil, fmt.Errorf("DB_CONN_STRING is required")
+		return nil, fmt.Errorf("DB_CONN_STRING is required (Oracle format: username/password@host:port/service_name)")
 	}
 	// At least one LLM endpoint required: Groq (remote) or Ollama (local)
 	if cfg.GroqAPIKey == "" && cfg.OllamaURL == "" {

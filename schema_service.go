@@ -38,18 +38,18 @@ func GetDynamicSchemaContext() ([]string, error) {
 	}
 
 	query := `
-	SELECT 
-		table_name, 
-		column_name, 
-		data_type 
-	FROM 
-		information_schema.columns 
-	WHERE 
-		table_schema = $1
-	ORDER BY 
-		table_name, 
-		ordinal_position;
-	`
+	 SELECT
+	   table_name,
+	   column_name,
+	   data_type
+	 FROM
+	   all_tab_columns
+	 WHERE
+	   owner = UPPER($1)
+	 ORDER BY
+	   table_name,
+	   column_id;
+	 `
 
 	if DbInstance == nil {
 		return nil, fmt.Errorf("koneksi database (DbInstance) belum siap")

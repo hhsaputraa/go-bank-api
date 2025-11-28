@@ -1,64 +1,64 @@
-CREATE OR REPLACE FUNCTION bpr_supra.update_saldo_otomatis()
-RETURNS TRIGGER AS $$
+CREATE OR REPLACE TRIGGER bpr_supra.update_saldo_otomatis
+AFTER INSERT OR UPDATE OR DELETE ON bpr_supra.jurnal_transaksi
+FOR EACH ROW
 DECLARE
-    v_id_nasabah VARCHAR(20);
+    v_id_nasabah VARCHAR2(20);
 BEGIN
-    IF (TG_OP = 'DELETE' OR TG_OP = 'UPDATE') THEN
-        IF (OLD.tipe_dk = 'KREDIT') THEN
+    -- Handle DELETE and UPDATE (reverse the old transaction)
+    IF DELETING OR UPDATING THEN
+        IF :OLD.tipe_dk = 'KREDIT' THEN
             UPDATE bpr_supra.rekening
-            SET saldo_saat_ini = saldo_saat_ini - OLD.jumlah
-            WHERE id_rekening = OLD.id_rekening;
-        ELSIF (OLD.tipe_dk = 'DEBIT') THEN
+            SET saldo_saat_ini = saldo_saat_ini - :OLD.jumlah
+            WHERE id_rekening = :OLD.id_rekening;
+        ELSIF :OLD.tipe_dk = 'DEBIT' THEN
             UPDATE bpr_supra.rekening
-            SET saldo_saat_ini = saldo_saat_ini + OLD.jumlah
-            WHERE id_rekening = OLD.id_rekening;
+            SET saldo_saat_ini = saldo_saat_ini + :OLD.jumlah
+            WHERE id_rekening = :OLD.id_rekening;
         END IF;
     END IF;
 
-    -- ==========================================
-    IF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Masukkan perhitungan baru
-        IF (NEW.tipe_dk = 'KREDIT') THEN
+    -- Handle INSERT and UPDATE (apply the new transaction)
+    IF INSERTING OR UPDATING THEN
+        IF :NEW.tipe_dk = 'KREDIT' THEN
             UPDATE bpr_supra.rekening
-            SET saldo_saat_ini = saldo_saat_ini + NEW.jumlah
-            WHERE id_rekening = NEW.id_rekening;
-        ELSIF (NEW.tipe_dk = 'DEBIT') THEN
+            SET saldo_saat_ini = saldo_saat_ini + :NEW.jumlah
+            WHERE id_rekening = :NEW.id_rekening;
+        ELSIF :NEW.tipe_dk = 'DEBIT' THEN
             UPDATE bpr_supra.rekening
-            SET saldo_saat_ini = saldo_saat_ini - NEW.jumlah
-            WHERE id_rekening = NEW.id_rekening;
+            SET saldo_saat_ini = saldo_saat_ini - :NEW.jumlah
+            WHERE id_rekening = :NEW.id_rekening;
         END IF;
     END IF;
 
-
-    IF (TG_OP = 'DELETE') THEN
-        SELECT id_nasabah INTO v_id_nasabah FROM bpr_supra.rekening WHERE id_rekening = OLD.id_rekening;
+    -- Get nasabah ID
+    IF DELETING THEN
+        SELECT id_nasabah INTO v_id_nasabah FROM bpr_supra.rekening WHERE id_rekening = :OLD.id_rekening;
     ELSE
-        SELECT id_nasabah INTO v_id_nasabah FROM bpr_supra.rekening WHERE id_rekening = NEW.id_rekening;
+        SELECT id_nasabah INTO v_id_nasabah FROM bpr_supra.rekening WHERE id_rekening = :NEW.id_rekening;
     END IF;
 
-
+    -- Update total saldo nasabah
     UPDATE bpr_supra.nasabah
     SET total_saldo = (
-        SELECT COALESCE(SUM(saldo_saat_ini), 0)
+        SELECT NVL(SUM(saldo_saat_ini), 0)
         FROM bpr_supra.rekening
         WHERE id_nasabah = v_id_nasabah
     )
     WHERE id_nasabah = v_id_nasabah;
 
-    IF (TG_OP = 'DELETE') THEN RETURN OLD; ELSE RETURN NEW; END IF;
 END;
-$$ LANGUAGE plpgsql;
+/
 
 
 
 -- 1. Hitung ulang saldo REKENING berdasarkan jurnal yang tersisa
 UPDATE bpr_supra.rekening r
 SET saldo_saat_ini = (
-    SELECT COALESCE(SUM(
-        CASE 
-            WHEN jt.tipe_dk = 'KREDIT' THEN jt.jumlah 
-            WHEN jt.tipe_dk = 'DEBIT' THEN -jt.jumlah 
-            ELSE 0 
+    SELECT NVL(SUM(
+        CASE
+            WHEN jt.tipe_dk = 'KREDIT' THEN jt.jumlah
+            WHEN jt.tipe_dk = 'DEBIT' THEN -jt.jumlah
+            ELSE 0
         END
     ), 0)
     FROM bpr_supra.jurnal_transaksi jt
@@ -68,7 +68,7 @@ SET saldo_saat_ini = (
 -- 2. Hitung ulang total saldo NASABAH berdasarkan rekening yang sudah bener
 UPDATE bpr_supra.nasabah n
 SET total_saldo = (
-    SELECT COALESCE(SUM(r.saldo_saat_ini), 0)
+    SELECT NVL(SUM(r.saldo_saat_ini), 0)
     FROM bpr_supra.rekening r
     WHERE r.id_nasabah = n.id_nasabah
 );

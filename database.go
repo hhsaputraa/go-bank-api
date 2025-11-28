@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/godror/godror"
 )
 
 var DbInstance *sql.DB
@@ -17,7 +17,7 @@ func ConnectDB() error {
 	}
 
 	var err error
-	DbInstance, err = sql.Open("pgx", AppConfig.DBConnString)
+	DbInstance, err = sql.Open("godror", AppConfig.DBConnString)
 	if err != nil {
 		return fmt.Errorf("gagal membuka koneksi database: %w", err)
 	}
