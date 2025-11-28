@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	_ "github.com/godror/godror"
+	_ "github.com/sijms/go-ora/v2"
 )
 
 var DbInstance *sql.DB
@@ -17,7 +17,7 @@ func ConnectDB() error {
 	}
 
 	var err error
-	DbInstance, err = sql.Open("godror", AppConfig.DBConnString)
+	DbInstance, err = sql.Open("oracle", AppConfig.DBConnString)
 	if err != nil {
 		return fmt.Errorf("gagal membuka koneksi database: %w", err)
 	}
