@@ -23,6 +23,7 @@ type AISqlResponse struct {
 	IsCached    bool
 	IsAmbiguous bool
 	Suggestions []string
+	InputTokens int
 }
 
 type SqlExample struct {

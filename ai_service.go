@@ -74,6 +74,11 @@ type GroqResponse struct {
 	Choices []struct {
 		Message GroqMessage `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"competion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 func sanitizeSQL(sql string) string {
@@ -356,6 +361,9 @@ Pertanyaan Pengguna: "%s"
 		}
 
 		rawContent = groqResp.Choices[0].Message.Content
+		inputTokens := groqResp.Usage.PromptTokens
+		outputTokens := groqResp.Usage.CompletionTokens
+		log.Printf("Token Input(Prompt): %d, Token Output(completion): %d, Total:%d", inputTokens, outputTokens, groqResp.Usage.TotalTokens)
 	}
 	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
 	re := regexp.MustCompile("(?s)```sql(.*?)```")
