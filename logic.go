@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -110,23 +109,34 @@ func BuildDynamicQuery(req QueryRequest) (string, []interface{}, error) {
 
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
 	var result QueryResult
-	cleanQuery := strings.TrimSpace(strings.ToUpper(query))
 
-	if !strings.HasPrefix(cleanQuery, "SELECT") && !strings.HasPrefix(cleanQuery, "WITH") {
+	// 1. Sanitasi & Validasi Keamanan
+	// Ubah ke uppercase untuk pengecekan keyword, tapi query asli tetap disimpan
+	checkQuery := strings.ToUpper(query)
+	checkQuery = strings.TrimSpace(checkQuery)
+
+	// Validasi Awal: Harus dimulai dengan SELECT atau WITH (untuk CTE)
+	if !strings.HasPrefix(checkQuery, "SELECT") && !strings.HasPrefix(checkQuery, "WITH") {
 		return result, fmt.Errorf("KEAMANAN: Hanya query SELECT yang diizinkan. Query Anda: %s", query)
 	}
 
-	forbidden := []string{"DROP ", "DELETE ", "UPDATE ", "INSERT ", "TRUNCATE ", "ALTER ", "GRANT ", "REVOKE "}
+	query = strings.TrimSpace(query)
+	query = strings.TrimRight(query, ";")
+
+	// Daftar kata kunci berbahaya yang mutlak dilarang
+	// Perhatikan spasi di akhir ("DROP ") agar tidak salah tangkap kata seperti "DROPBOX" (jika ada)
+	forbidden := []string{
+		"DROP ", "DELETE ", "UPDATE ", "INSERT ", "TRUNCATE ",
+		"ALTER ", "GRANT ", "REVOKE ", "CREATE ", "MERGE ", "RENAME ",
+	}
+
 	for _, word := range forbidden {
-		if strings.Contains(cleanQuery, word) {
+		if strings.Contains(checkQuery, word) {
 			return result, fmt.Errorf("KEAMANAN: Ditemukan kata kunci terlarang '%s'", word)
 		}
 	}
 
-	if strings.Contains(query, ";") {
-
-	}
-
+	// 2. Setup Context Timeout
 	timeout := 10 * time.Second
 	if AppConfig != nil {
 		timeout = AppConfig.QueryTimeout
@@ -135,43 +145,60 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	txOptions := &sql.TxOptions{
-		Isolation: sql.LevelDefault,
-		ReadOnly:  true,
-	}
-
-	tx, err := DbInstance.BeginTx(ctx, txOptions)
+	// 3. Memulai Transaksi (Tanpa Mode ReadOnly)
+	// Masalah sebelumnya: Driver Oracle/Go 10g menolak `ReadOnly: true`.
+	// Solusi: Gunakan `nil` untuk options. Keamanan dijaga oleh validasi di atas.
+	tx, err := DbInstance.BeginTx(ctx, nil)
 	if err != nil {
-		return result, fmt.Errorf("gagal memulai transaksi read-only: %w", err)
+		return result, fmt.Errorf("gagal memulai transaksi database: %w", err)
 	}
+	// Defer Rollback wajib ada agar koneksi dikembalikan ke pool dan tidak ada perubahan yang di-commit
 	defer tx.Rollback()
+
+	// 4. Eksekusi Query
 	rows, err := tx.QueryContext(ctx, query, params...)
 	if err != nil {
-		log.Printf("Error eksekusi query: %v. Query: %s", err, query)
-		return result, fmt.Errorf("gagal mengeksekusi query (mungkin query tidak valid atau melanggar aturan read-only)")
+		log.Printf("Error eksekusi query SQL: %v. Query: %s", err, query)
+		return result, fmt.Errorf("gagal mengeksekusi query SQL (Pastikan syntax Oracle 10g valid)")
 	}
 	defer rows.Close()
 
+	// 5. Ambil Metadata Kolom
 	columns, err := rows.Columns()
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("gagal membaca kolom: %w", err)
 	}
 	result.Columns = columns
 	result.Rows = make([][]interface{}, 0)
 
+	// 6. Scanning Data Dinamis
+	// Kita harus menyiapkan slice pointer interface{} karena kita tidak tahu tipe datanya di awal
 	for rows.Next() {
 		rowValues := make([]interface{}, len(columns))
-
 		rowScanners := make([]interface{}, len(columns))
+
 		for i := range rowValues {
 			rowScanners[i] = &rowValues[i]
 		}
 
 		if err := rows.Scan(rowScanners...); err != nil {
-			return result, err
+			return result, fmt.Errorf("gagal scanning baris data: %w", err)
+		}
+
+		// (Opsional) Normalisasi tipe data khusus Oracle jika perlu
+		// Misal: Mengubah []byte menjadi string jika driver mengembalikan raw bytes
+		for i, val := range rowValues {
+			if b, ok := val.([]byte); ok {
+				rowValues[i] = string(b)
+			}
 		}
 
 		result.Rows = append(result.Rows, rowValues)
+	}
+
+	// Cek error setelah loop selesai (best practice)
+	if err = rows.Err(); err != nil {
+		return result, fmt.Errorf("error saat iterasi baris: %w", err)
 	}
 
 	return result, nil

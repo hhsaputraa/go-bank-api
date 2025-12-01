@@ -36,6 +36,7 @@ type Config struct {
 	QdrantGRPCPort        int
 	QdrantURL             string
 	QdrantCollectionName  string
+	QdrantAPIKey          string
 	QdrantCacheCollection string
 	QdrantDistanceMetric  string
 	QdrantTimeout         time.Duration
@@ -89,6 +90,7 @@ func LoadConfig() (*Config, error) {
 		QdrantGRPCHost:        getEnv("QDRANT_GRPC_HOST", ""),
 		QdrantGRPCPort:        getEnvAsInt("QDRANT_GRPC_PORT", 6334),
 		QdrantURL:             getEnv("QDRANT_URL", ""),
+		QdrantAPIKey:          getEnv("QDRANT_API_KEY", ""),
 		QdrantCollectionName:  getEnv("QDRANT_COLLECTION_NAME", ""),
 		QdrantCacheCollection: getEnv("QDRANT_CACHE_COLLECTION", ""),
 		QdrantDistanceMetric:  getEnv("QDRANT_DISTANCE_METRIC", ""),

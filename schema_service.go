@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -16,17 +15,16 @@ func getSchemaFromConnStr() (string, error) {
 		return "", fmt.Errorf("DB_CONN_STRING tidak ditemukan di .env")
 	}
 
-	parsedURL, err := url.Parse(connStr)
-	if err != nil {
-		return "", fmt.Errorf("gagal parse DB_CONN_STRING: %w", err)
+	parts := strings.Split(connStr, "/")
+	if len(parts) < 2 {
+		return "",fmt.Errorf("format oracle tidak valid")
 	}
-
-	schema := parsedURL.Query().Get("search_path")
-	if schema == "" {
-		return "", fmt.Errorf("search_path tidak ditemukan di DB_CONN_STRING (contoh: ...?search_path=nama_skema)")
+	
+	username := parts[0]
+	if username == "" {
+		return "", fmt.Errorf("username tidak ditemukan di oracle")
 	}
-
-	return schema, nil
+	return strings.ToUpper(username), nil
 }
 
 func GetDynamicSchemaContext() ([]string, error) {
@@ -36,6 +34,8 @@ func GetDynamicSchemaContext() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	schema = strings.Trim(schema, ":") 
+    schema = strings.TrimSpace(schema)
 
 	query := `
 	 SELECT
@@ -45,10 +45,10 @@ func GetDynamicSchemaContext() ([]string, error) {
 	 FROM
 	   all_tab_columns
 	 WHERE
-	   owner = UPPER($1)
+	   owner = UPPER(:1)
 	 ORDER BY
 	   table_name,
-	   column_id;
+	   column_id
 	 `
 
 	if DbInstance == nil {
@@ -107,10 +107,16 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("koneksi database belum siap")
 	}
 
+	// 1. Ambil Schema
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
 		return "", err
 	}
+
+	// 2. [PERBAIKAN UTAMA] Bersihkan Schema dari titik dua (:) dan spasi
+	// Tanpa ini, query jadi "FROM SCHEMA:.TABEL" -> Error ORA-00933
+	schema = strings.Trim(schema, ":")
+	schema = strings.TrimSpace(schema)
 
 	var builder strings.Builder
 	builder.WriteString("== LIVE DATA REFERENSI (Isi Tabel Master Terbaru) ==\n")
@@ -128,11 +134,14 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 		case "master_tipe_transaksi":
 			idCol = "id_tipe_transaksi"
 		}
+
+		// Query sudah benar (tanpa titik koma), schema sudah bersih
 		query := fmt.Sprintf("SELECT %s, %s FROM %s.%s ORDER BY %s ASC", idCol, nameCol, schema, tableName, idCol)
 
 		rows, err := DbInstance.QueryContext(ctx, query)
 		if err != nil {
-			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v", tableName, err)
+			// Tambahkan log query agar terlihat jika masih ada yang salah
+			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v (Query: %s)", tableName, err, query)
 			continue
 		}
 
@@ -164,24 +173,37 @@ func GetDynamicSqlExamples() ([]SqlExample, error) {
 		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
 	}
 
-	// Get schema name dynamically from connection string
+	// 1. Ambil Schema
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
 		return nil, fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-	SELECT
-		prompt_example,
-		sql_example
-	FROM
-		%s.rag_sql_examples
-	ORDER BY
-		id;
+	// 2. [PENTING] Bersihkan Schema dari titik dua (:) dan spasi
+	// Anda lupa menambahkan ini di fungsi ini, padahal di fungsi sebelumnya ada.
+	schema = strings.Trim(schema, ":")
+	schema = strings.TrimSpace(schema)
+
+	// 3. Susun Query
+	// Saya tambahkan strings.TrimSpace pada hasil Sprintf untuk membuang enter di awal/akhir
+	// agar driver Oracle 10g tidak bingung.
+	rawQuery := fmt.Sprintf(`
+		SELECT
+			prompt_example,
+			sql_example
+		FROM
+			%s.rag_sql_examples
+		ORDER BY
+			id ASC
 	`, schema)
 
+	query := strings.TrimSpace(rawQuery)
+
+	// Eksekusi
 	rows, err := DbInstance.QueryContext(context.Background(), query)
 	if err != nil {
+		// Tambahkan log query agar jika error lagi, kita tahu bentuk SQL yang dikirim apa
+		log.Printf("Query Gagal: %s", query) 
 		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
 	}
 	defer rows.Close()
@@ -224,10 +246,10 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 
 	query := fmt.Sprintf(`
 	INSERT INTO %s.rag_sql_examples
-		(prompt_example, sql_example)
-	VALUES
-		($1, $2)
-	`, schema)
+        (prompt_example, sql_example)
+    VALUES
+        (:1, :2)
+    `, schema)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -248,7 +270,14 @@ type DictionaryItem struct {
 }
 
 func GetBusinessDictionary(ctx context.Context) (string, error) {
-	rows, err := DbInstance.QueryContext(ctx, "SELECT istilah, definisi_bisnis, logika_sql FROM ai_dictionary")
+	schema, err := getSchemaFromConnStr()
+    if err != nil {
+        return "", err
+    }
+
+    query := fmt.Sprintf("SELECT istilah, definisi_bisnis, logika_sql FROM %s.ai_dictionary", schema)
+    
+    rows, err := DbInstance.QueryContext(ctx, query)
 	if err != nil {
 		return "", nil
 	}
@@ -281,33 +310,37 @@ func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
 		return false, fmt.Errorf("koneksi database (DbInstance) belum siap")
 	}
 
+	// 1. Ambil & Bersihkan Schema
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
 		return false, fmt.Errorf("gagal mendapatkan schema: %w", err)
 	}
+	schema = strings.Trim(schema, ":")
+	schema = strings.TrimSpace(schema)
 
+	// 2. Pre-process Prompt di Go (Optimasi)
+	// Kita lower di sini supaya tidak membebani DB dengan fungsi LOWER(:1) berulang kali
 	lowerPrompt := strings.ToLower(prompt)
 
-	query := fmt.Sprintf(`
-        SELECT EXISTS (
-            SELECT 1 
-            FROM %s.absurd_keywords 
-            WHERE is_active = true 
-              AND $1 ILIKE '%%' || keyword || '%%'
-            LIMIT 1
-        )
-    `, schema)
+	// 3. Query "Bulletproof" (Satu Baris & Pakai INSTR)
+	// Logika: Jika INSTR(prompt, keyword) > 0, artinya keyword ditemukan di dalam prompt.
+	// Kita pakai count(*) dan ROWNUM = 1 agar query berhenti begitu ketemu satu saja (Cepat).
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s.absurd_keywords WHERE is_active = 1 AND INSTR(:1, LOWER(keyword)) > 0 AND ROWNUM = 1", schema)
 
-	var exists bool
+	var exists int
+	
+	// 4. Eksekusi
+	// Parameter :1 diisi oleh variabel lowerPrompt
 	err = DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
 	if err != nil {
-		log.Printf("Error query absurd_keywords: %v", err)
+		log.Printf("Error query absurd_keywords: %v (Query: %s)", err, query)
 		return false, err
 	}
 
-	if exists {
-		log.Printf("Prompt terdeteksi absurd: '%s'", prompt)
+	if exists >= 1 {
+		log.Printf("⛔ Prompt terdeteksi absurd/OOT: '%s'", prompt)
+		return true, nil
 	}
 
-	return exists, nil
+	return false, nil
 }

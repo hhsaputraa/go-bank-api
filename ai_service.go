@@ -39,6 +39,8 @@ func InitVectorService() error {
 	client, err := pb.NewClient(&pb.Config{
 		Host: AppConfig.QdrantGRPCHost,
 		Port: AppConfig.QdrantGRPCPort,
+		APIKey: AppConfig.QdrantAPIKey,
+    UseTLS: true,
 	})
 	if err != nil {
 		return fmt.Errorf("gagal membuat Qdrant gRPC client: %w", err)
@@ -51,7 +53,17 @@ func InitVectorService() error {
 		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
+if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
+        AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
+        return fmt.Errorf("gagal membuat/memverifikasi RAG collection: %w", err)
+    }
 
+    // 3. [FIX UTAMA] Buat Index untuk field 'category'
+    log.Println("Memastikan index payload 'category' tersedia...")
+    if err := qdrantCreatePayloadIndex(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
+         log.Printf("Warning: Gagal membuat index payload: %v", err)
+         // Tidak perlu return error fatal, karena mungkin sudah ada
+    }
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
 	log.Printf("   - Embedding Model: %s", AppConfig.EmbeddingModel)
 	log.Printf("   - Qdrant gRPC: %s:%d", AppConfig.QdrantGRPCHost, AppConfig.QdrantGRPCPort)
@@ -82,6 +94,7 @@ type GroqResponse struct {
 }
 
 func sanitizeSQL(sql string) string {
+	// 1. Bersihkan baris komentar (--)
 	lines := strings.Split(sql, "\n")
 	var cleanLines []string
 	for _, line := range lines {
@@ -93,8 +106,13 @@ func sanitizeSQL(sql string) string {
 	}
 	cleanSql := strings.Join(cleanLines, "\n")
 
-	lower := strings.ToLower(cleanSql)
+	// 2. [FIX ORA-00911] Hapus titik koma (;) di akhir string
+	cleanSql = strings.TrimSpace(cleanSql)
+	cleanSql = strings.TrimRight(cleanSql, ";") // <--- INI KUNCINYA
+	cleanSql = strings.TrimSpace(cleanSql)      // Trim lagi jaga-jaga ada spasi setelah ;
 
+	// 3. Validasi Keamanan (SELECT only)
+	lower := strings.ToLower(cleanSql)
 	if strings.Contains(lower, "insert") || strings.Contains(lower, "update") ||
 		strings.Contains(lower, "delete") || strings.Contains(lower, "drop") ||
 		strings.Contains(lower, "alter") || strings.Contains(lower, "create") ||
@@ -102,7 +120,7 @@ func sanitizeSQL(sql string) string {
 		return ""
 	}
 
-	if !strings.HasPrefix(strings.TrimSpace(lower), "select") {
+	if !strings.HasPrefix(strings.TrimSpace(lower), "select") && !strings.HasPrefix(strings.TrimSpace(lower), "with") {
 		return ""
 	}
 
@@ -440,6 +458,10 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	
+	if AppConfig != nil && AppConfig.QdrantAPIKey != "" {
+        req.Header.Set("api-key", AppConfig.QdrantAPIKey)
+    }
 
 	timeout := 60 * time.Second
 	if AppConfig != nil {
@@ -489,6 +511,31 @@ func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int,
 	}
 
 	return fmt.Errorf("create collection status %d: %s", resp.StatusCode, string(body))
+}
+
+type qdrantCreateIndexReq struct {
+	FieldName   string `json:"field_name"`
+	FieldSchema string `json:"field_schema"`
+}
+
+func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fieldName, schemaType string) error {
+	url := fmt.Sprintf("%s/collections/%s/index", baseURL, collectionName)
+	req := qdrantCreateIndexReq{
+		FieldName:   fieldName,
+		FieldSchema: schemaType,
+	}
+
+	resp, body, err := httpDoJSON(ctx, http.MethodPut, url, req)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		log.Printf("Payload index '%s' (%s) pada collection '%s' dipastikan ada.", fieldName, schemaType, collectionName)
+		return nil
+	}
+	
+	return fmt.Errorf("create index status %d: %s", resp.StatusCode, string(body))
 }
 
 func qdrantUpsertPoints(ctx context.Context, baseURL, name string, points []qdrantPoint) error {
