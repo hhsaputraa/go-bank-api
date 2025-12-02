@@ -253,7 +253,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 
 	finalPrompt := fmt.Sprintf(`
-Anda adalah ahli SQL PostgreSQL senior. Tanggal hari ini: %s.
+Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: %s.
 
 == 1. KAMUS DATA (DDL & STRUKTUR) ==
 Baca DDL ini dengan teliti. Perhatikan KOMENTAR (-- ...) di setiap kolom untuk memahami artinya.
@@ -385,20 +385,27 @@ Pertanyaan Pengguna: "%s"
 	}
 	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
 	re := regexp.MustCompile("(?s)```sql(.*?)```")
-	match := re.FindStringSubmatch(rawContent)
+	matches := re.FindAllStringSubmatch(rawContent, -1)
 
-	var sqlQuery string
-	if len(match) > 1 {
-		sqlQuery = strings.TrimSpace(match[1])
-	} else {
-		log.Println("⚠️ AI tidak menggunakan format markdown SQL, mencoba membersihkan manual...")
-		sqlQuery = strings.TrimSpace(rawContent)
-		if idx := strings.Index(strings.ToLower(sqlQuery), "select"); idx != -1 {
-			sqlQuery = sqlQuery[idx:]
-		}
-	}
+var sqlQuery string
 
-	log.Println("SQL dari AI (Extracted):", sqlQuery)
+// 3. Loop semua kotak yang ditemukan
+for _, match := range matches {
+    content := strings.TrimSpace(match[1])
+    
+    // Cek apakah kotak ini berisi keyword SQL (SELECT atau WITH)
+    // Abaikan jika isinya cuma komentar "-- Langkah berpikir"
+    if strings.HasPrefix(strings.ToUpper(content), "SELECT") || 
+       strings.HasPrefix(strings.ToUpper(content), "WITH") {
+        sqlQuery = content
+    }
+}
+
+// Jika setelah loop sqlQuery masih kosong, ambil kotak terakhir sebagai fallback
+if sqlQuery == "" && len(matches) > 0 {
+    sqlQuery = strings.TrimSpace(matches[len(matches)-1][1])
+}
+
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 	sqlQuery = sanitizeSQL(sqlQuery)
 	if sqlQuery == "" {
