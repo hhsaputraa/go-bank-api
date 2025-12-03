@@ -393,3 +393,120 @@ func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error encoding response: %v", err)
 	}
 }
+
+// Tambahkan di handlers.go
+
+func HandleRegister(w http.ResponseWriter, r *http.Request) {
+	// CORS setup standar
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		sendError(w, http.StatusBadRequest, "INVALID_DATA", "Username dan Password wajib diisi")
+		return
+	}
+
+	if err := RegisterUser(req); err != nil {
+		sendError(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
+		return
+	}
+
+	sendSuccess(w, map[string]string{"message": "Registrasi berhasil. Silakan login."})
+}
+
+func HandleLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req LoginRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+        return
+    }
+
+    // [BARU] Ambil Info Tambahan untuk Session
+    req.UserAgent = r.UserAgent()
+    req.IPAddress = r.RemoteAddr
+    // Jika di balik proxy (Nginx/Cloudflare), gunakan: r.Header.Get("X-Forwarded-For")
+
+    token, err := LoginUser(req)
+    if err != nil {
+        sendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
+        return
+    }
+
+    sendSuccess(w, map[string]string{
+        "token":   token,
+        "message": "Login berhasil",
+        "type":    "Bearer",
+    })
+}
+
+func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	// CORS Setup
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		return
+	}
+
+	// Ambil Token dari Header Authorization
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ditemukan")
+		return
+	}
+
+	// Format: "Bearer <token>"
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		sendError(w, http.StatusBadRequest, "INVALID_FORMAT", "Format token salah")
+		return
+	}
+
+	tokenString := parts[1]
+
+	// Panggil Logic Logout (Hapus dari DB)
+	if err := LogoutUser(tokenString); err != nil {
+		log.Printf("Gagal logout: %v", err)
+		sendError(w, http.StatusInternalServerError, "LOGOUT_FAILED", "Gagal memproses logout")
+		return
+	}
+
+	sendSuccess(w, map[string]string{
+		"message": "Logout berhasil. Sesi telah dihapus.",
+	})
+}

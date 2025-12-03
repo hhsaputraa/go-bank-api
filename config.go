@@ -58,6 +58,9 @@ type Config struct {
 	// Environment
 	AppEnv string
 	Debug  bool
+	
+	//JWT SECRET
+	JWTSecret string
 }
 
 var AppConfig *Config
@@ -113,6 +116,7 @@ func LoadConfig() (*Config, error) {
 		// Environment
 		AppEnv: getEnv("APP_ENV", ""),
 		Debug:  getEnvAsBool("DEBUG", false),
+		JWTSecret: getEnv("JWT_SECRET", ""),
 	}
 
 	// Validate required fields
