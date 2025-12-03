@@ -36,7 +36,7 @@ func ConnectDB() error {
 		return fmt.Errorf("gagal melakukan ping ke database: %w", err)
 	}
 
-	log.Printf("✅ Berhasil terkoneksi ke database PostgreSQL!")
+	log.Printf("✅ Berhasil terkoneksi ke database ORACLE 10G!")
 	log.Printf("   - Max Open Connections: %d", AppConfig.DBMaxOpenConns)
 	log.Printf("   - Max Idle Connections: %d", AppConfig.DBMaxIdleConns)
 	log.Printf("   - Connection Max Lifetime: %v", AppConfig.DBConnMaxLifetime)
