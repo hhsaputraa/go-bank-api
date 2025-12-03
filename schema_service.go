@@ -156,7 +156,9 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 			builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
 			counter++
 		}
-		rows.Close()
+		if err := rows.Close(); err != nil {
+			log.Printf("Warning: Gagal menutup cursor database untuk tabel %s: %v", tableName, err)
+		}
 
 		if counter == 0 {
 			builder.WriteString("(Tabel kosong)\n")

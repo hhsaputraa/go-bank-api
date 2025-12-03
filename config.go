@@ -98,10 +98,10 @@ func LoadConfig() (*Config, error) {
 
 		// Cache
 		CacheSimilarityThreshold: getEnvAsFloat32("CACHE_SIMILARITY_THRESHOLD", 0.95),
-		CacheSearchLimit:         uint64(getEnvAsInt("CACHE_SEARCH_LIMIT", 1)),
+		CacheSearchLimit:         getEnvAsUint64("CACHE_SEARCH_LIMIT", 1),
 
 		// RAG
-		RAGSearchLimit: uint64(getEnvAsInt("RAG_SEARCH_LIMIT", 7)),
+		RAGSearchLimit: getEnvAsUint64("RAG_SEARCH_LIMIT", 7),
 
 		// Server
 		ServerPort: getEnv("SERVER_PORT", ""),
@@ -147,6 +147,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsUint64(key string, defaultValue uint64) uint64 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseUint(valueStr, 10, 64)
 	if err != nil {
 		return defaultValue
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"log"
 )
 
 func sendSuccess(w http.ResponseWriter, data interface{}) {
@@ -13,7 +14,9 @@ func sendSuccess(w http.ResponseWriter, data interface{}) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding success response: %v", err)
+	}
 }
 
 func sendAmbiguous(w http.ResponseWriter, message string, suggestions []string) {
@@ -24,7 +27,9 @@ func sendAmbiguous(w http.ResponseWriter, message string, suggestions []string) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding ambiguous response: %v", err)
+	}
 }
 
 func sendError(w http.ResponseWriter, statusCode int, code, message string, details ...string) {
@@ -39,5 +44,7 @@ func sendError(w http.ResponseWriter, statusCode int, code, message string, deta
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Error encoding error response: %v", err)
+	}
 }

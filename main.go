@@ -1,10 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
-
+	"time"
 	"github.com/joho/godotenv"
 )
 
@@ -38,9 +37,15 @@ func main() {
 	// Register HTTP routes
 	log.Println("Aplikasi siap berjalan...")
 	RegisterRoutes()
-
-	// Start server
-	addr := fmt.Sprintf("%s:%s", AppConfig.ServerHost, AppConfig.ServerPort)
-	log.Printf("Server web berjalan di http://%s\n", addr)
-	log.Fatal(http.ListenAndServe(":"+AppConfig.ServerPort, nil))
+	
+	srv := &http.Server {
+		Addr:				":" + AppConfig.ServerPort,
+		Handler:			nil,
+		ReadHeaderTimeout:	10 * time.Second,
+		ReadTimeout:		10 * time.Second,
+		WriteTimeout:		30 * time.Second,
+		IdleTimeout:		60 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
+	
 }

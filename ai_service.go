@@ -481,12 +481,11 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	}
 	defer func() {
 		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}()
 
 	respBody, readErr := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	if readErr != nil {
 		return resp, nil, fmt.Errorf("gagal baca response body: %w", readErr)
 	}
