@@ -25,23 +25,30 @@ func HandleHealthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateDangerousIntent(prompt string) error {
-	dangerousKeywords := []string{
+	manipulationKeywords := []string{
 		"hapus", "delete", "drop", "remove",
 		"ubah", "update", "ganti", "edit", "alter", "modify",
 		"tambah", "insert", "create", "add",
 		"truncate", "grant", "revoke", "rubah",
 	}
-	pattern := `\b(` + strings.Join(dangerousKeywords, "|") + `)\b`
+	
+	schemaKeywords := []string {
+		"all_tabs", "all_tables", "user_tables", "dba_tables", "all_users",
+		"user_users", "dba_users", "all_views", "user_views", "all_tab_column",
+		"user_tab_columns", "all_source", "user_source", "role_sys_privs", "user_role_privs",
+		"v\\$", "gv\\$",
+	}
+	
+	allForbideden := append(manipulationKeywords, schemaKeywords...)
+	pattern := `\b(` + strings.Join(allForbideden, "|") + `)\b`
 	re := regexp.MustCompile(pattern)
-
+	
 	if re.MatchString(prompt) {
 		match := re.FindString(prompt)
-		return fmt.Errorf("permintaan ditolak: mengandung kata kunci manipulasi '%s'. ", match)
+		return fmt.Errorf("permintaan ditolak: terdeteksi akses ke objek sistem terlarang atau manipulasi '%s'", match)
 	}
-
 	return nil
 }
-
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")

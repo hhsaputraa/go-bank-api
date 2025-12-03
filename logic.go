@@ -128,6 +128,9 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	forbidden := []string{
 		"DROP ", "DELETE ", "UPDATE ", "INSERT ", "TRUNCATE ",
 		"ALTER ", "GRANT ", "REVOKE ", "CREATE ", "MERGE ", "RENAME ",
+		"ALL_TABS", "ALL_TABLES", "USER_TABLES", "DBA_TABLES", "ALL_VIEWS",
+		"DBA_VIEWS", "ALL_SOURCE", "USER_SOURCE","ALL_USERS", "DBA_USERS",
+		"SYS", "SYSTEM.", "V$", "GV$",
 	}
 
 	for _, word := range forbidden {
