@@ -432,7 +432,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3084")
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -478,7 +478,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3084")
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -528,5 +528,78 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 	sendSuccess(w, map[string]string{
 		"message": "Logout berhasil. Sesi telah dihapus.",
+	})
+}
+
+// handlers.go
+
+func HandleMe(w http.ResponseWriter, r *http.Request) {
+	frontendURL := "http://localhost:3084" 
+	
+	w.Header().Set("Access-Control-Allow-Origin", frontendURL)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// Handle Preflight Request (Browser bertanya: "Boleh gak saya kirim cookie?")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		respondWithError(w, http.StatusMethodNotAllowed, "Hanya GET yang diizinkan")
+		return
+	}
+
+	// Ambil UserID dari Context (hasil dari AuthMiddleware)
+	userIDVal := r.Context().Value("user_id")
+	if userIDVal == nil {
+		respondWithError(w, http.StatusUnauthorized, "User ID context missing")
+		return
+	}
+
+	// Konversi UserID (JWT numeric biasanya float64)
+	var userID int64
+	if v, ok := userIDVal.(float64); ok {
+		userID = int64(v)
+	} else if v, ok := userIDVal.(int64); ok { // Jaga-jaga kalau formatnya int
+		userID = v
+	} else {
+		respondWithError(w, http.StatusInternalServerError, "Format User ID salah")
+		return
+	}
+
+	// Query DB
+	var user User
+	var isAdminInt, isActiveInt int
+
+	// Sesuaikan nama kolom dengan tabel Anda
+	query := `
+		SELECT id_app_users, username, full_name, email, is_admin, is_active, last_login_at 
+		FROM app_users 
+		WHERE id_app_users = :1
+	`
+	err := DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
+		&user.ID, &user.Username, &user.FullName, &user.Email,
+		&isAdminInt, &isActiveInt, &user.LastLoginAt,
+	)
+
+	if err != nil {
+		log.Printf("Error get user %d: %v", userID, err)
+		respondWithError(w, http.StatusNotFound, "User tidak ditemukan")
+		return
+	}
+
+	user.IsAdmin = (isAdminInt == 7) // Sesuaikan logika admin Anda
+	user.IsActive = (isActiveInt == 1)
+
+	// Response Sukses
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "success",
+		"message": "Data profil user",
+		"data": map[string]interface{}{
+			"user": user,
+		},
 	})
 }

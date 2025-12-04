@@ -10,6 +10,7 @@ func RegisterRoutes() {
 	http.HandleFunc("/api/auth/register", HandleRegister) // Endpoint Baru
 	http.HandleFunc("/api/auth/login", HandleLogin)       // Endpoint Baru
 	http.HandleFunc("/api/auth/logout", AuthMiddleware(HandleLogout))
+	http.HandleFunc("/api/auth/me", AuthMiddleware(HandleMe))
 
 	// Protected Routes (Harus Login / Pakai Token)
 	// Kita bungkus HandleDynamicQuery dengan AuthMiddleware
@@ -17,6 +18,7 @@ func RegisterRoutes() {
 	
 	// Endpoint Admin juga sebaiknya diproteksi
 	http.HandleFunc("/api/feedback/koreksi", AuthMiddleware(HandleFeedbackKoreksi))
+
 	
 	// Admin Routes (Harusnya punya middleware khusus admin, tapi pakai AuthMiddleware dulu gapapa)
 	http.HandleFunc("/admin/retrain", AuthMiddleware(HandleAdminRetrain))

@@ -150,8 +150,22 @@ func LoginUser(req LoginRequest) (string, error) {
 	return tokenString, nil
 }
 
+// auth_service.go
+
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	
 	return func(w http.ResponseWriter, r *http.Request) {
+		frontendURL := "http://localhost:3084" 
+	
+	w.Header().Set("Access-Control-Allow-Origin", frontendURL)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Methods", "GET,POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			next(w, r)
+			return
+		}
+
 		var tokenString string
 		cookie, err := r.Cookie("auth_token")
 		if err == nil {
@@ -169,12 +183,12 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if tokenString == "" {
-			sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token autentikasi diperlukan")
+			respondWithError(w, http.StatusUnauthorized, "UNAUTHORIZED") // Pastikan pakai helper json error
 			return
 		}
 
+		// 3. Parse & Validasi Token
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Pastikan metode signing yang digunakan sesuai (HMAC)
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("metode signing tidak valid")
 			}
@@ -186,18 +200,27 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok || !token.Valid {
+			sendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token claims tidak valid")
+			return
+		}
+
+		// 4. Cek Session di DB
 		if DbInstance != nil {
 			var exists int
 			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1"
-
 			err := DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
-
 			if err != nil || exists == 0 {
-				sendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi anda telah berakhir atau login di perangkat lain")
+				sendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi berakhir")
 				return
 			}
 		}
-		next(w, r)
+
+		// 5. [BARU] Simpan User ID ke Context agar bisa dibaca Handler
+		// Kita simpan 'user_id' dari claims jwt ke context request
+		ctx := context.WithValue(r.Context(), "user_id", claims["user_id"])
+		next(w, r.WithContext(ctx))
 	}
 }
 
