@@ -109,6 +109,60 @@ func sanitizeSQL(sql string) string {
 	return cleanSql
 }
 
+func getRelevantDDL(ctx context.Context, vector []float32) (string, error) {
+	var searchLimit uint64 = 5
+	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
+		CollectionName: AppConfig.QdrantCollectionName,
+		Query:          pb.NewQuery(vector...),
+		WithPayload:    pb.NewWithPayload(true),
+		Limit:          &searchLimit,
+		Filter: &pb.Filter{
+			Must: []*pb.Condition{
+				{
+					ConditionOneOf: &pb.Condition_Field{
+						Field: &pb.FieldCondition{
+							Key: "category",
+							Match: &pb.Match{
+								MatchValue: &pb.Match_Keyword{
+									Keyword: "ddl",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("gagal mencari DDL di Qdrant: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Hanya gunakan tabel-tabel berikut:\n")
+
+	seen := make(map[string]bool)
+	for _, point := range searchResponse {
+		if p := point.GetPayload(); p != nil {
+			if v, ok := p["content"]; ok {
+				ddl := v.GetStringValue()
+				if ddl != "" && !seen[ddl] {
+					sb.WriteString(ddl)
+					sb.WriteString("\n---\n")
+					seen[ddl] = true
+				}
+			}
+		}
+	}
+	if sb.Len() < 50 {
+		log.Println("⚠️ Tidak ditemukan DDL relevan di Vector, mengambil semua schema (Fallback).")
+		allDDLs, _ := GetDynamicSchemaContext()
+		return strings.Join(allDDLs, "\n---\n"), nil
+	}
+
+	return sb.String(), nil
+}
+
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	if AppConfig == nil {
 		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
@@ -217,11 +271,17 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 		sqlContext = "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL."
 	}
 
-	allDDLs, err := GetDynamicSchemaContext()
+	// allDDLs, err := GetDynamicSchemaContext()
+	// if err != nil {
+	// 	return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
+	// }
+	// allDDLString := strings.Join(allDDLs, "\n---\n")
+	log.Println("🔍 Mencari tabel (DDL) yang relevan dengan pertanyaan user...")
+	relevantDDLString, err := getRelevantDDL(ctx, promptVector)
 	if err != nil {
-		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
+		// Log error tapi jangan panik, mungkin lanjut dengan konteks kosong atau fallback
+		log.Printf("Error getRelevantDDL: %v", err)
 	}
-	allDDLString := strings.Join(allDDLs, "\n---\n")
 
 	refDataString, err := GetDynamicReferenceData(ctx)
 	if err != nil {
@@ -267,7 +327,7 @@ Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat:
 Pertanyaan Pengguna: "%s"
 `,
 		time.Now().Format("2006-01-02"),
-		allDDLString,
+		relevantDDLString,
 		refDataString,
 		businessDict,
 		sqlContext,
