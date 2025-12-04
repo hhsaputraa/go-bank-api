@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 func respondWithError(w http.ResponseWriter, code int, message string) {
@@ -33,18 +34,18 @@ func validateDangerousIntent(prompt string) error {
 		"tambah", "insert", "create", "add",
 		"truncate", "grant", "revoke", "rubah",
 	}
-	
-	schemaKeywords := []string {
+
+	schemaKeywords := []string{
 		"all_tabs", "all_tables", "user_tables", "dba_tables", "all_users",
 		"user_users", "dba_users", "all_views", "user_views", "all_tab_column",
 		"user_tab_columns", "all_source", "user_source", "role_sys_privs", "user_role_privs",
 		"v\\$", "gv\\$",
 	}
-	
+
 	allForbideden := append(manipulationKeywords, schemaKeywords...)
 	pattern := `\b(` + strings.Join(allForbideden, "|") + `)\b`
 	re := regexp.MustCompile(pattern)
-	
+
 	if re.MatchString(prompt) {
 		match := re.FindString(prompt)
 		return fmt.Errorf("permintaan ditolak: terdeteksi akses ke objek sistem terlarang atau manipulasi '%s'", match)
@@ -432,6 +433,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	if r.Method == http.MethodOptions {
@@ -445,34 +447,43 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LoginRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
-        return
-    }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		return
+	}
+	req.UserAgent = r.UserAgent()
+	req.IPAddress = r.RemoteAddr
 
-    // [BARU] Ambil Info Tambahan untuk Session
-    req.UserAgent = r.UserAgent()
-    req.IPAddress = r.RemoteAddr
-    // Jika di balik proxy (Nginx/Cloudflare), gunakan: r.Header.Get("X-Forwarded-For")
+	token, err := LoginUser(req)
+	if err != nil {
+		sendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
+		return
+	}
+	isProduction := AppConfig.AppEnv == "priduction"
 
-    token, err := LoginUser(req)
-    if err != nil {
-        sendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
-        return
-    }
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		Secure:   isProduction,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	})
 
-    sendSuccess(w, map[string]string{
-        "token":   token,
-        "message": "Login berhasil",
-        "type":    "Bearer",
-    })
+	sendSuccess(w, map[string]string{
+		"message": "Login berhasil",
+	})
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
-	// CORS Setup
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// Handle Preflight Request
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -482,30 +493,39 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
 		return
 	}
+	var tokenString string
 
-	// Ambil Token dari Header Authorization
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak ditemukan")
-		return
+	cookie, err := r.Cookie("auth_token")
+	if err == nil {
+		tokenString = cookie.Value
+	} else {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" {
+			parts := strings.Split(authHeader, " ")
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				tokenString = parts[1]
+			}
+		}
 	}
 
-	// Format: "Bearer <token>"
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		sendError(w, http.StatusBadRequest, "INVALID_FORMAT", "Format token salah")
-		return
+	if tokenString != "" {
+		if err := LogoutUser(tokenString); err != nil {
+
+			log.Printf("Warning: Gagal menghapus sesi dari DB: %v", err)
+		}
 	}
 
-	tokenString := parts[1]
+	isProduction := AppConfig.AppEnv == "production"
 
-	// Panggil Logic Logout (Hapus dari DB)
-	if err := LogoutUser(tokenString); err != nil {
-		log.Printf("Gagal logout: %v", err)
-		sendError(w, http.StatusInternalServerError, "LOGOUT_FAILED", "Gagal memproses logout")
-		return
-	}
-
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",              // Kosongkan isi
+		Path:     "/",             // Harus sama dengan path saat Login
+		Expires:  time.Unix(0, 0), // Set waktu ke masa lalu (Jan 1 1970)
+		MaxAge:   -1,              // Instruksi ke browser untuk segera hapus
+		HttpOnly: true,
+		Secure:   isProduction,
+	})
 	sendSuccess(w, map[string]string{
 		"message": "Logout berhasil. Sesi telah dihapus.",
 	})

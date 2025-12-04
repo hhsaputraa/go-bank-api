@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
-	"log"
+
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -37,11 +38,9 @@ type RegisterRequest struct {
 	Email    string `json:"email"`
 }
 
-
-
 func HashPassword(password string) (string, error) {
-    bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-    return string(bytes), err
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(bytes), err
 }
 
 func CheckPasswordHash(password, hash string) bool {
@@ -102,7 +101,7 @@ func LoginUser(req LoginRequest) (string, error) {
 		FROM app_users WHERE username = :1
 	`
 	err := DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
-		&user.ID, &user.Username, &user.PasswordHash, &user.FullName, 
+		&user.ID, &user.Username, &user.PasswordHash, &user.FullName,
 		&isAdmin, &isActive,
 	)
 
@@ -153,21 +152,29 @@ func LoginUser(req LoginRequest) (string, error) {
 
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
+		var tokenString string
+		cookie, err := r.Cookie("auth_token")
+		if err == nil {
+			tokenString = cookie.Value
+		}
+
+		if tokenString == "" {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "" {
+				parts := strings.Split(authHeader, " ")
+				if len(parts) == 2 && parts[0] == "Bearer" {
+					tokenString = parts[1]
+				}
+			}
+		}
+
+		if tokenString == "" {
 			sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token autentikasi diperlukan")
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			sendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Format token salah")
-			return
-		}
-
-		tokenString := parts[1]
-
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			// Pastikan metode signing yang digunakan sesuai (HMAC)
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("metode signing tidak valid")
 			}
@@ -182,15 +189,14 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if DbInstance != nil {
 			var exists int
 			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1"
-			
+
 			err := DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
-			
+
 			if err != nil || exists == 0 {
 				sendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi anda telah berakhir atau login di perangkat lain")
 				return
 			}
 		}
-
 		next(w, r)
 	}
 }
