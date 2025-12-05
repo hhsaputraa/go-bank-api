@@ -132,19 +132,27 @@ func LoginUser(req LoginRequest) (string, error) {
 		return "", err
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-		DbInstance.ExecContext(ctx, "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1", user.ID)
-
-		DbInstance.ExecContext(ctx, "DELETE FROM user_sessions WHERE id_app_users = :1 AND device_info = :2", user.ID, req.UserAgent)
-
-		DbInstance.ExecContext(ctx, `
-			INSERT INTO user_sessions (id_app_users, token, device_info, ip_address, expires_at)
-			VALUES (:1, :2, :3, :4, :5)
-		`, user.ID, tokenString, req.UserAgent, req.IPAddress, expTime)
-	}()
+	_, err = DbInstance.ExecContext(ctx, "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1", user.ID)
+	if err != nil {
+		log.Printf("[AUTH] WARNING: Gagal update last_login: %v", err)
+	}
+	
+	_, err = DbInstance.ExecContext(ctx, "DELETE FROM user_sessions WHERE id_app_users = :1 AND device_info = :2", user.ID, req.UserAgent)
+	if err != nil {
+		log.Printf("[AUTH] Warning: Gagal Hapus sesi lama: %v", err)
+	}
+_, err = DbInstance.ExecContext(ctx, `
+		INSERT INTO user_sessions (id_app_users, token, device_info, ip_address, expires_at)
+		VALUES (:1, :2, :3, :4, :5)
+	`, user.ID, tokenString, req.UserAgent, req.IPAddress, expTime)
+	
+	if err != nil {
+		log.Printf("[AUTH] Error Critical: Gagal simpan sesi: %v", err)
+		return "", errors.New("gagal membuat sesi login")
+	}
 
 	log.Printf("[AUTH] Login Success: %s", user.Username)
 	return tokenString, nil
@@ -153,14 +161,14 @@ func LoginUser(req LoginRequest) (string, error) {
 // auth_service.go
 
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	
 	return func(w http.ResponseWriter, r *http.Request) {
 		frontendURL := "http://localhost:3084" 
 	
-	w.Header().Set("Access-Control-Allow-Origin", frontendURL)
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-	w.Header().Set("Access-Control-Allow-Methods", "GET,POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Origin", frontendURL)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		
 		if r.Method == http.MethodOptions {
 			next(w, r)
 			return
@@ -183,11 +191,10 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if tokenString == "" {
-			respondWithError(w, http.StatusUnauthorized, "UNAUTHORIZED") // Pastikan pakai helper json error
+			sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token diperlukan")
 			return
 		}
 
-		// 3. Parse & Validasi Token
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("metode signing tidak valid")
@@ -206,19 +213,24 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 4. Cek Session di DB
 		if DbInstance != nil {
 			var exists int
-			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1"
+			
+			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP"
+			
 			err := DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
-			if err != nil || exists == 0 {
+			
+			if err != nil {
+				log.Printf("DB Session Error: %v", err)
+				sendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
+				return
+			}
+			
+			if exists == 0 {
 				sendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi berakhir")
 				return
 			}
 		}
-
-		// 5. [BARU] Simpan User ID ke Context agar bisa dibaca Handler
-		// Kita simpan 'user_id' dari claims jwt ke context request
 		ctx := context.WithValue(r.Context(), "user_id", claims["user_id"])
 		next(w, r.WithContext(ctx))
 	}
