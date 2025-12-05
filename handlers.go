@@ -451,6 +451,22 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
 		return
 	}
+
+	plainUsername, err := DecryptField(req.Username)
+	if err != nil {
+		fmt.Printf("[Security] Gagal dekripsi username: %v\n", err)
+		sendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Username)")
+		return
+	}
+	req.Username = plainUsername
+
+	plainPassword, err := DecryptField(req.Password)
+	if err != nil {
+		fmt.Printf("[Security] Gagal dekripsi password: %v\n", err)
+		sendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Password)")
+		return
+	}
+	req.Password = plainPassword
 	req.UserAgent = r.UserAgent()
 	req.IPAddress = r.RemoteAddr
 
@@ -534,8 +550,8 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 // handlers.go
 
 func HandleMe(w http.ResponseWriter, r *http.Request) {
-	frontendURL := "http://localhost:3084" 
-	
+	frontendURL := "http://localhost:3084"
+
 	w.Header().Set("Access-Control-Allow-Origin", frontendURL)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")

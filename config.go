@@ -58,9 +58,12 @@ type Config struct {
 	// Environment
 	AppEnv string
 	Debug  bool
-	
+
 	//JWT SECRET
 	JWTSecret string
+
+	//AES Key
+	AESKey string
 }
 
 var AppConfig *Config
@@ -114,9 +117,10 @@ func LoadConfig() (*Config, error) {
 		QueryTimeout: time.Duration(getEnvAsInt("QUERY_TIMEOUT_SECONDS", 10)) * time.Second,
 
 		// Environment
-		AppEnv: getEnv("APP_ENV", ""),
-		Debug:  getEnvAsBool("DEBUG", false),
+		AppEnv:    getEnv("APP_ENV", ""),
+		Debug:     getEnvAsBool("DEBUG", false),
 		JWTSecret: getEnv("JWT_SECRET", ""),
+		AESKey:    getEnv("AES_KEY", ""),
 	}
 
 	// Validate required fields
@@ -129,6 +133,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.GoogleAPIKey == "" {
 		return nil, fmt.Errorf("GOOGLE_API_KEY is required")
+	}
+	if len(cfg.AESKey) != 32 {
+		return nil, fmt.Errorf("AES_KEY harus 32 karakter (saat ini: %d)", len(cfg.AESKey))
 	}
 
 	AppConfig = cfg
