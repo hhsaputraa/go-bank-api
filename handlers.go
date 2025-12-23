@@ -123,12 +123,36 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("SQL yang akan dieksekusi: %s", aiResp.SQL)
+	log.Printf("SQL Awal: %s", aiResp.SQL)
+
 	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
+
 	if execErr != nil {
-		log.Printf("GAGAL EKSEKUSI QUERY: %v | SQL: %s", execErr, aiResp.SQL)
+		log.Printf("⚠️ Eksekusi Gagal: %v. Mencoba Self-Correction...", execErr)
+
+		fixedSQL, repairErr := RepairSQLFromAI(aiResp.PromptAsli, aiResp.SQL, execErr.Error())
+
+		if repairErr == nil {
+			log.Printf("🔄 Mencoba eksekusi SQL Perbaikan: %s", fixedSQL)
+			dataRetry, execErrRetry := ExecuteDynamicQuery(fixedSQL, nil)
+
+			if execErrRetry == nil {
+				log.Println("Self-Correction Berhasil menyelamatkan request!")
+
+				data = dataRetry
+				execErr = nil
+				aiResp.SQL = fixedSQL
+			} else {
+				log.Printf("Self-Correction juga gagal: %v", execErrRetry)
+			}
+		} else {
+			log.Printf("Gagal generate perbaikan: %v", repairErr)
+		}
+	}
+	if execErr != nil {
+		log.Printf("FATAL: Query Gagal Total | SQL: %s", aiResp.SQL)
 		sendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
-			"Query tidak dapat dieksekusi. Mungkin syntax salah atau melanggar aturan database",
+			"Query tidak dapat dieksekusi. Sistem mencoba memperbaiki otomatis namun gagal.",
 			execErr.Error())
 		return
 	}
@@ -327,7 +351,7 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(req.Collection, "cache") {
 		if err := validateReadOnlySQL(req.SQL); err != nil {
 
-			log.Printf("⚠️ SECURITY ALERT: Percobaan update query berbahaya pada ID %s. Query: %s", req.ID, req.SQL)
+			log.Printf("SECURITY ALERT: Percobaan update query berbahaya pada ID %s. Query: %s", req.ID, req.SQL)
 
 			respondWithError(w, http.StatusBadRequest, "SQL Ditolak: "+err.Error())
 			return

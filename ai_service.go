@@ -740,7 +740,7 @@ func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery
 		return fmt.Errorf("gagal update ke qdrant: %w", err)
 	}
 
-	log.Printf("✅ UPDATE SUKSES: Collection '%s', ID '%s'", collectionName, id)
+	log.Printf("UPDATE SUKSES: Collection '%s', ID '%s'", collectionName, id)
 	return nil
 }
 
@@ -779,7 +779,7 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 		return fmt.Errorf("gagal upsert ke qdrant: %w", err)
 	}
 
-	log.Printf("✅ MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
+	log.Printf("MANUAL CACHE INJECT: Berhasil menyimpan prompt '%s'", promptAsli)
 	return nil
 }
 
@@ -816,7 +816,7 @@ func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
 	}
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
-		log.Printf("✅ Collection '%s' berhasil dihapus (atau belum ada).", name)
+		log.Printf("Collection '%s' berhasil dihapus (atau belum ada).", name)
 		return nil
 	}
 
@@ -934,4 +934,82 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 
 	log.Printf("Dynamic Context: Menemukan %d tabel relevan untuk prompt ini.", foundCount)
 	return ddlBuilder.String(), nil
+}
+
+func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
+	if AppConfig == nil {
+		return "", fmt.Errorf("konfigurasi belum dimuat")
+	}
+
+	log.Println("Memulai Self-Correction AI...")
+
+	systemPrompt := fmt.Sprintf(`
+Anda adalah ahli database Oracle 10g.
+Tugas Anda adalah MEMPERBAIKI query SQL yang error agar bisa berjalan normal.
+
+KONTEKS ERROR:
+- Pertanyaan User: "%s"
+- SQL Salah: %s
+- Pesan Error Oracle: %s
+
+ATURAN PERBAIKAN:
+1. Analisis pesan error.
+2. Perbaiki sintaks SQL agar kompatibel dengan Oracle 10g.
+3. Jangan banyak bicara. Langsung berikan SQL yang sudah diperbaiki di dalam blok markdown.
+4. Pastikan tetap menggunakan ROWNUM <= 15 jika query menampilkan data banyak.
+
+Output SQL Perbaikan:
+`, promptAsli, sqlSalah, pesanError)
+
+	reqBody := GroqRequest{
+		Model:       AppConfig.GroqModel,
+		Messages:    []GroqMessage{{Role: "user", Content: systemPrompt}},
+		Temperature: 0.1,
+	}
+
+	jsonBody, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gagal koneksi ke Groq saat repair: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBodyBytes, _ := io.ReadAll(resp.Body)
+
+	var groqResp GroqResponse
+	if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
+		return "", fmt.Errorf("gagal parse respon repair: %v", err)
+	}
+
+	if len(groqResp.Choices) == 0 {
+		return "", fmt.Errorf("AI tidak memberikan perbaikan")
+	}
+	rawContent := groqResp.Choices[0].Message.Content
+	re := regexp.MustCompile("(?s)```sql(.*?)```")
+	matches := re.FindStringSubmatch(rawContent)
+
+	var fixedSQL string
+	if len(matches) > 1 {
+		fixedSQL = matches[1]
+	} else {
+		fixedSQL = rawContent
+	}
+
+	fixedSQL = sanitizeSQL(fixedSQL)
+
+	if fixedSQL == "" {
+		return "", fmt.Errorf("hasil perbaikan kosong atau tidak valid")
+	}
+
+	log.Printf("SQL berhasil diperbaiki menjadi: %s", fixedSQL)
+	return fixedSQL, nil
 }

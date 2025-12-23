@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -15,15 +16,21 @@ func getSchemaFromConnStr() (string, error) {
 		return "", fmt.Errorf("DB_CONN_STRING tidak ditemukan di .env")
 	}
 
-	parts := strings.Split(connStr, "/")
-	if len(parts) < 2 {
-		return "", fmt.Errorf("format oracle tidak valid")
+	cleanConnStr := connStr
+	if !strings.HasPrefix(connStr, "oracle://") {
+		cleanConnStr = "oracle://" + connStr
 	}
 
-	username := parts[0]
-	if username == "" {
-		return "", fmt.Errorf("username tidak ditemukan di oracle")
+	u, err := url.Parse(cleanConnStr)
+	if err != nil {
+		return "", fmt.Errorf("gagal parsing connection string: %w", err)
 	}
+
+	username := u.User.Username()
+	if username == "" {
+		return "", fmt.Errorf("username/schema tidak ditemukan dalam connection string")
+	}
+
 	return strings.ToUpper(username), nil
 }
 
