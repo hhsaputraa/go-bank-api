@@ -37,6 +37,10 @@ type AppError struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+func (e *AppError) Error() string {
+	return e.Message
+}
+
 type QueryResponse struct {
 	Status      string      `json:"status"`
 	Message     string      `json:"message,omitempty"`
@@ -44,4 +48,12 @@ type QueryResponse struct {
 	Suggestions []string    `json:"suggestions,omitempty"`
 	ErrorCode   string      `json:"error_code,omitempty"`
 	ErrorDetail string      `json:"error_detail,omitempty"`
+}
+
+type EnhanceRequest struct {
+	DraftPrompt string `json:"draft_prompt"`
+}
+
+type EnhanceResponse struct {
+	EnhancedPrompt string `json:"enhanced_prompt"`
 }

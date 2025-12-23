@@ -53,7 +53,6 @@ func validateDangerousIntent(prompt string) error {
 	return nil
 }
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
-	// CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -98,7 +97,19 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
-		log.Printf("AI gagal generate SQL: %v", err)
+		if appErr, ok := err.(*AppError); ok {
+			log.Printf("Handled Error: %s - %s", appErr.Code, appErr.Message)
+
+			statusCode := http.StatusInternalServerError
+			if appErr.Code == "DANGEROUS_INTENT" {
+				statusCode = http.StatusForbidden
+			}
+
+			sendError(w, statusCode, appErr.Code, appErr.Message)
+			return
+		}
+
+		log.Printf("AI gagal generate SQL (System Error): %v", err)
 		sendError(w, http.StatusInternalServerError, "AI_GENERATION_FAILED", "Gagal menghasilkan query SQL")
 		return
 	}
@@ -617,5 +628,47 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 		"data": map[string]interface{}{
 			"user": user,
 		},
+	})
+}
+
+func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		respondWithError(w, http.StatusMethodNotAllowed, "Metode HTTP tidak diizinkan")
+		return
+	}
+
+	var req EnhanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondWithError(w, http.StatusBadRequest, "Format JSON tidak valid")
+		return
+	}
+
+	if strings.TrimSpace(req.DraftPrompt) == "" {
+		respondWithError(w, http.StatusBadRequest, "Draft prompt tidak boleh kosong")
+		return
+	}
+
+	log.Printf("✨ Enhancing prompt: '%s'...", req.DraftPrompt)
+
+	enhancedText, err := EnhanceNaturalLanguage(req.DraftPrompt)
+	if err != nil {
+		log.Printf("❌ Gagal enhance prompt: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "Gagal memperjelas teks (AI Error)")
+		return
+	}
+
+	log.Printf("✅ Hasil Enhance: '%s'", enhancedText)
+
+	respondWithJSON(w, http.StatusOK, EnhanceResponse{
+		EnhancedPrompt: enhancedText,
 	})
 }

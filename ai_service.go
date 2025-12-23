@@ -37,10 +37,10 @@ func InitVectorService() error {
 	geminiEmbedder = geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
 
 	client, err := pb.NewClient(&pb.Config{
-		Host: AppConfig.QdrantGRPCHost,
-		Port: AppConfig.QdrantGRPCPort,
+		Host:   AppConfig.QdrantGRPCHost,
+		Port:   AppConfig.QdrantGRPCPort,
 		APIKey: AppConfig.QdrantAPIKey,
-    UseTLS: true,
+		UseTLS: true,
 	})
 	if err != nil {
 		return fmt.Errorf("gagal membuat Qdrant gRPC client: %w", err)
@@ -53,23 +53,21 @@ func InitVectorService() error {
 		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
-if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
-        AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
-        return fmt.Errorf("gagal membuat/memverifikasi RAG collection: %w", err)
-    }
+	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName,
+		AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
+		return fmt.Errorf("gagal membuat/memverifikasi RAG collection: %w", err)
+	}
 
-    // 3. [FIX UTAMA] Buat Index untuk field 'category'
-    log.Println("Memastikan index payload 'category' tersedia...")
-    if err := qdrantCreatePayloadIndex(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
-         log.Printf("Warning: Gagal membuat index payload: %v", err)
-         // Tidak perlu return error fatal, karena mungkin sudah ada
-    }
+	log.Println("Memastikan index payload 'category' tersedia...")
+	if err := qdrantCreatePayloadIndex(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
+		log.Printf("Warning: Gagal membuat index payload: %v", err)
+	}
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
-	log.Printf("   - Embedding Model: %s", AppConfig.EmbeddingModel)
-	log.Printf("   - Qdrant gRPC: %s:%d", AppConfig.QdrantGRPCHost, AppConfig.QdrantGRPCPort)
-	log.Printf("   - Qdrant REST: %s", AppConfig.QdrantURL)
-	log.Printf("   - RAG Collection: %s", AppConfig.QdrantCollectionName)
-	log.Printf("   - Cache Collection: %s", AppConfig.QdrantCacheCollection)
+	log.Printf("Embedding Model: %s", AppConfig.EmbeddingModel)
+	log.Printf("Qdrant gRPC: %s:%d", AppConfig.QdrantGRPCHost, AppConfig.QdrantGRPCPort)
+	log.Printf("Qdrant REST: %s", AppConfig.QdrantURL)
+	log.Printf("RAG Collection: %s", AppConfig.QdrantCollectionName)
+	log.Printf("Cache Collection: %s", AppConfig.QdrantCacheCollection)
 	return nil
 }
 
@@ -94,7 +92,6 @@ type GroqResponse struct {
 }
 
 func sanitizeSQL(sql string) string {
-	// 1. Bersihkan baris komentar (--)
 	lines := strings.Split(sql, "\n")
 	var cleanLines []string
 	for _, line := range lines {
@@ -106,12 +103,9 @@ func sanitizeSQL(sql string) string {
 	}
 	cleanSql := strings.Join(cleanLines, "\n")
 
-	// 2. [FIX ORA-00911] Hapus titik koma (;) di akhir string
 	cleanSql = strings.TrimSpace(cleanSql)
-	cleanSql = strings.TrimRight(cleanSql, ";") // <--- INI KUNCINYA
-	cleanSql = strings.TrimSpace(cleanSql)      // Trim lagi jaga-jaga ada spasi setelah ;
-
-	// 3. Validasi Keamanan (SELECT only)
+	cleanSql = strings.TrimRight(cleanSql, ";")
+	cleanSql = strings.TrimSpace(cleanSql)
 	lower := strings.ToLower(cleanSql)
 	if strings.Contains(lower, "insert") || strings.Contains(lower, "update") ||
 		strings.Contains(lower, "delete") || strings.Contains(lower, "drop") ||
@@ -128,6 +122,17 @@ func sanitizeSQL(sql string) string {
 }
 
 func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
+
+	sqlPattern := regexp.MustCompile(`(?i)^\s*(select|insert|update|delete|drop|alter|truncate|create|grant|revoke|with)\b`)
+
+	if sqlPattern.MatchString(userPrompt) {
+		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
+
+		return AISqlResponse{}, &AppError{
+			Code:    "DANGEROUS_INTENT",
+			Message: "DITOLAK. Silakan ganti pertanyaan Anda.",
+		}
+	}
 	if AppConfig == nil {
 		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
 	}
@@ -211,7 +216,6 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 			log.Println("⚠️ Score RAG rendah. Mengabaikan contoh RAG, beralih ke mode Zero-Shot dengan DDL & Referensi.")
 			sqlContext = "TIDAK ADA CONTOH SQL YANG RELEVAN. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL DAN DATA REFERENSI."
 		} else {
-			// Jika score bagus, rakit contekan
 			var contextBuilder strings.Builder
 			contextBuilder.WriteString("Berikut adalah CONTOH DDL dan SQL yang paling relevan (IKUTI POLA INI):\n")
 
@@ -278,7 +282,7 @@ JANGAN MENGARANG ID SENDIRI.
 == TUGAS ANDA (CHAIN OF THOUGHT) ==
 Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat:
 1. **Analisis Intent**: Apa data yang dicari user?
-2. **Mapping Referensi**: Apakah ada kata kunci (misal: "blokir") yang perlu dicari ID-nya di "LIVE DATA REFERENSI"? Jika ada, sebutkan ID-nya.
+2. **Mapping Referensi**: Apakah ada kata kunci (misal: "blokir") yang perlu dicari ID-nya di "LIVE DATA REFERENSI"? Jika ada, sebutkan nilai-nya.
 3. **Strategi Query**: Table mana yang di-JOIN? Apa kondisi WHERE-nya?
 4. **SQL Final**: Tulis query dalam blok markdown code.
 
@@ -387,24 +391,17 @@ Pertanyaan Pengguna: "%s"
 	re := regexp.MustCompile("(?s)```sql(.*?)```")
 	matches := re.FindAllStringSubmatch(rawContent, -1)
 
-var sqlQuery string
-
-// 3. Loop semua kotak yang ditemukan
-for _, match := range matches {
-    content := strings.TrimSpace(match[1])
-    
-    // Cek apakah kotak ini berisi keyword SQL (SELECT atau WITH)
-    // Abaikan jika isinya cuma komentar "-- Langkah berpikir"
-    if strings.HasPrefix(strings.ToUpper(content), "SELECT") || 
-       strings.HasPrefix(strings.ToUpper(content), "WITH") {
-        sqlQuery = content
-    }
-}
-
-// Jika setelah loop sqlQuery masih kosong, ambil kotak terakhir sebagai fallback
-if sqlQuery == "" && len(matches) > 0 {
-    sqlQuery = strings.TrimSpace(matches[len(matches)-1][1])
-}
+	var sqlQuery string
+	for _, match := range matches {
+		content := strings.TrimSpace(match[1])
+		if strings.HasPrefix(strings.ToUpper(content), "SELECT") ||
+			strings.HasPrefix(strings.ToUpper(content), "WITH") {
+			sqlQuery = content
+		}
+	}
+	if sqlQuery == "" && len(matches) > 0 {
+		sqlQuery = strings.TrimSpace(matches[len(matches)-1][1])
+	}
 
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 	sqlQuery = sanitizeSQL(sqlQuery)
@@ -465,10 +462,10 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	
+
 	if AppConfig != nil && AppConfig.QdrantAPIKey != "" {
-        req.Header.Set("api-key", AppConfig.QdrantAPIKey)
-    }
+		req.Header.Set("api-key", AppConfig.QdrantAPIKey)
+	}
 
 	timeout := 60 * time.Second
 	if AppConfig != nil {
@@ -540,7 +537,7 @@ func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fiel
 		log.Printf("Payload index '%s' (%s) pada collection '%s' dipastikan ada.", fieldName, schemaType, collectionName)
 		return nil
 	}
-	
+
 	return fmt.Errorf("create index status %d: %s", resp.StatusCode, string(body))
 }
 
@@ -799,4 +796,65 @@ func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
 	}
 
 	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
+}
+
+func EnhanceNaturalLanguage(draft string) (string, error) {
+	if AppConfig.GroqAPIKey == "" {
+		return "", fmt.Errorf("API Key Groq belum diset")
+	}
+	model := "llama-3.1-8b-instant"
+	systemPrompt := `
+Anda adalah editor bahasa profesional. Tugas Anda adalah mengubah input user yang singkat/ambigu menjadi pertanyaan bahasa Indonesia yang baku, sopan, dan spesifik untuk query database.
+
+ATURAN:
+1. JANGAN menjawab pertanyaan. HANYA perbaiki kalimatnya.
+2. Jika ada angka ambigu (misal "20 juta"), tambahkan konteks seperti "sebesar", "minimal", atau "lebih dari".
+3. Output harus langsung kalimat perbaikan saja tanpa tanda kutip atau pembuka kata.
+
+Contoh:
+Input: "tabungan 20 juta"
+Output: Tampilkan nasabah yang memiliki saldo tabungan sebesar 20 juta rupiah atau lebih.
+
+Input User: "%s"
+Output:`
+
+	finalPrompt := fmt.Sprintf(systemPrompt, draft)
+
+	reqBody := GroqRequest{
+		Model:       model,
+		Messages:    []GroqMessage{{Role: "user", Content: finalPrompt}},
+		Temperature: 0.1,
+	}
+
+	jsonBody, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gagal koneksi ke Groq: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBodyBytes, _ := io.ReadAll(resp.Body)
+
+	var groqResp GroqResponse
+	if err := json.Unmarshal(respBodyBytes, &groqResp); err != nil {
+		return "", fmt.Errorf("gagal parse respon Groq: %v", err)
+	}
+
+	if len(groqResp.Choices) == 0 {
+		return "", fmt.Errorf("Groq tidak merespon")
+	}
+
+	result := strings.TrimSpace(groqResp.Choices[0].Message.Content)
+	result = strings.Trim(result, "\"")
+
+	return result, nil
 }
