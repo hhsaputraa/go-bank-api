@@ -148,6 +148,9 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
 
+	var softCacheContext string
+
+	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
 	searchReq := qdrantSearchReq{
 		Vector:      promptVector,
 		Limit:       AppConfig.CacheSearchLimit,
@@ -165,13 +168,24 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 		if topScore >= AppConfig.CacheSimilarityThreshold {
 			if cachedSql, ok := cachedPoint.Payload["sql_query"]; ok {
-				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f (Melebihi Threshold: %f)", topScore, AppConfig.CacheSimilarityThreshold)
+				log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f", topScore)
 				return AISqlResponse{SQL: cachedSql.(string), IsCached: true}, nil
-			} else {
-				log.Printf("CACHE MISS. Ditemukan item cache (Skor: %f) tapi payload 'sql_query' hilang.", topScore)
+			}
+		}
+
+		if topScore >= 0.80 {
+			if cachedSql, ok := cachedPoint.Payload["sql_query"]; ok {
+				if cachedPrompt, ok2 := cachedPoint.Payload["prompt_asli"]; ok2 {
+					log.Printf("💡 SOFT CACHE HIT (Skor: %f). Menjadikan riwayat sebagai referensi.", topScore)
+					softCacheContext = fmt.Sprintf(`
+					CONTOH RIWAYAT SERUPA (Sangat Relevan):
+					User: "%s"
+					SQL: %s
+					`, cachedPrompt, cachedSql)
+				}
 			}
 		} else {
-			log.Printf("CACHE MISS. Skor tertinggi: %f (Dibawah Threshold: %f)", topScore, AppConfig.CacheSimilarityThreshold)
+			log.Printf("CACHE MISS. Skor tertinggi: %f (Terlalu rendah untuk dijadikan referensi)", topScore)
 		}
 	} else {
 		log.Println("CACHE MISS. Tidak ada item cache yang cocok ditemukan.")
@@ -211,9 +225,9 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	var sqlContext string
 	if len(searchResponse) > 0 {
 		topResult := searchResponse[0]
-		log.Printf("🔍 Top RAG Score: %f", topResult.Score)
+		log.Printf("Top RAG Score: %f", topResult.Score)
 		if topResult.Score < SimilarityConfidenceThreshold {
-			log.Println("⚠️ Score RAG rendah. Mengabaikan contoh RAG, beralih ke mode Zero-Shot dengan DDL & Referensi.")
+			log.Println("Score RAG rendah. Mengabaikan contoh RAG, beralih ke mode Zero-Shot dengan DDL & Referensi.")
 			sqlContext = "TIDAK ADA CONTOH SQL YANG RELEVAN. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL DAN DATA REFERENSI."
 		} else {
 			var contextBuilder strings.Builder
@@ -239,12 +253,18 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 		sqlContext = "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA ANDA SENDIRI BERDASARKAN DDL."
 	}
 
-	allDDLs, err := GetDynamicSchemaContext()
-	if err != nil {
-		return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
+	var allDDLString string
+	relevantDDL, err := searchRelevantDDL(ctx, promptVector)
+	if err != nil || strings.TrimSpace(relevantDDL) == "" {
+		log.Println("⚠️ Dynamic DDL kosong/gagal. Fallback ke load SEMUA tabel.")
+		allDDLs, err := GetDynamicSchemaContext()
+		if err != nil {
+			return AISqlResponse{}, fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
+		}
+		allDDLString = strings.Join(allDDLs, "\n---\n")
+	} else {
+		allDDLString = relevantDDL
 	}
-	allDDLString := strings.Join(allDDLs, "\n---\n")
-
 	refDataString, err := GetDynamicReferenceData(ctx)
 	if err != nil {
 		log.Println("Warning: Gagal ambil data referensi:", err)
@@ -274,6 +294,10 @@ JANGAN MENGARANG ID SENDIRI.
 == 4. CONTOH SQL (RAG CONTEXT) ==
 %s
 
+== 5. SOFT CACHE HIT (REFERENSI) ==
+Gunakan contoh di bawah ini sebagai referensi utama pola query jika relevan.
+%s
+
 == ATURAN PENULISAN SQL (ZERO-SHOT & RAG) ==
 1. **Priority Reference**: Jika user menyebut "Tabungan", "Deposito", "Aktif", atau "Tutup", WAJIB cek bagian "LIVE DATA REFERENSI" untuk mendapatkan ID yang tepat. Jangan menebak "1" atau "0".
 2. **Column Validation**: Hanya gunakan kolom yang ADA di DDL di atas.
@@ -293,6 +317,7 @@ Pertanyaan Pengguna: "%s"
 		refDataString,
 		businessDict,
 		sqlContext,
+		softCacheContext,
 		userPrompt,
 	)
 
@@ -804,19 +829,19 @@ func EnhanceNaturalLanguage(draft string) (string, error) {
 	}
 	model := "llama-3.1-8b-instant"
 	systemPrompt := `
-Anda adalah editor bahasa profesional. Tugas Anda adalah mengubah input user yang singkat/ambigu menjadi pertanyaan bahasa Indonesia yang baku, sopan, dan spesifik untuk query database.
+			Anda adalah editor bahasa profesional. Tugas Anda adalah mengubah input user yang singkat/ambigu menjadi pertanyaan bahasa Indonesia yang baku, sopan, dan spesifik untuk query database.
 
-ATURAN:
-1. JANGAN menjawab pertanyaan. HANYA perbaiki kalimatnya.
-2. Jika ada angka ambigu (misal "20 juta"), tambahkan konteks seperti "sebesar", "minimal", atau "lebih dari".
-3. Output harus langsung kalimat perbaikan saja tanpa tanda kutip atau pembuka kata.
+			ATURAN:
+			1. JANGAN menjawab pertanyaan. HANYA perbaiki kalimatnya.
+			2. Jika ada angka ambigu (misal "20 juta"), tambahkan konteks seperti "sebesar", "minimal", atau "lebih dari".
+			3. Output harus langsung kalimat perbaikan saja tanpa tanda kutip atau pembuka kata.
 
-Contoh:
-Input: "tabungan 20 juta"
-Output: Tampilkan nasabah yang memiliki saldo tabungan sebesar 20 juta rupiah atau lebih.
+			Contoh:
+			Input: "tabungan 20 juta"
+			Output: Tampilkan nasabah yang memiliki saldo tabungan sebesar 20 juta rupiah atau lebih.
 
-Input User: "%s"
-Output:`
+			Input User: "%s"
+			Output:`
 
 	finalPrompt := fmt.Sprintf(systemPrompt, draft)
 
@@ -857,4 +882,56 @@ Output:`
 	result = strings.Trim(result, "\"")
 
 	return result, nil
+}
+
+func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, error) {
+	var limit uint64 = 5
+
+	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
+		CollectionName: AppConfig.QdrantCollectionName,
+		Query:          pb.NewQuery(promptVector...),
+		WithPayload:    pb.NewWithPayload(true),
+		Limit:          &limit,
+		Filter: &pb.Filter{
+			Must: []*pb.Condition{
+				{
+					ConditionOneOf: &pb.Condition_Field{
+						Field: &pb.FieldCondition{
+							Key: "category",
+							Match: &pb.Match{
+								MatchValue: &pb.Match_Keyword{
+									Keyword: "ddl",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	var ddlBuilder strings.Builder
+	foundCount := 0
+
+	for _, point := range searchResponse {
+		if point.Score < 0.3 {
+			continue
+		}
+
+		if p := point.GetPayload(); p != nil {
+			if v, ok := p["content"]; ok {
+				ddl := v.GetStringValue()
+				ddlBuilder.WriteString(ddl)
+				ddlBuilder.WriteString("\n\n")
+				foundCount++
+			}
+		}
+	}
+
+	log.Printf("Dynamic Context: Menemukan %d tabel relevan untuk prompt ini.", foundCount)
+	return ddlBuilder.String(), nil
 }
