@@ -74,6 +74,11 @@ type QdrantDataResponse struct {
 	Payload map[string]interface{} `json:"payload"`
 }
 
+type IntentResponse struct {
+	Category string `json:"category"`
+	Reason   string `json:"reason"`
+}
+
 func InitVectorService() error {
 	if AppConfig == nil {
 		return fmt.Errorf("konfigurasi aplikasi belum dimuat")
@@ -122,6 +127,22 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	}
 	if AppConfig == nil {
 		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
+	}
+
+	intent, _ := ClassifyIntent(userPrompt)
+
+	if intent == "CHAT" {
+		return AISqlResponse{}, &AppError{
+			Code:    "CHIT_CHAT",
+			Message: "Halo! Saya Asisten Data Bank Supra. Silakan tanya seputar Perbankan.",
+		}
+	}
+
+	if intent == "OFF_TOPIC" {
+		return AISqlResponse{}, &AppError{
+			Code:    "CHIT_CHAT",
+			Message: "Maaf, saya hanya bisa menjawab pertanyaan seputar Perbankan. Tidak bisa melayani topik lain.",
+		}
 	}
 
 	ctx := context.Background()
@@ -703,4 +724,43 @@ func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
 	}
 
 	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
+}
+
+func ClassifyIntent(userInput string) (string, error) {
+	systemPrompt := `
+Anda adalah AI Router (Resepsionis) untuk Sistem Database Bank. 
+Tugas Anda HANYA mengklasifikasikan input user ke dalam 3 kategori:
+
+1. "SQL": Jika user meminta data bank, nasabah, rekening, transaksi, saldo,umur nasabah atau laporan.
+2. "CHAT": Jika user hanya menyapa (halo, selamat pagi), bertanya identitas bot, atau berterima kasih.
+3. "OFF_TOPIC": Jika user bertanya hal di luar perbankan (misal: resep masakan, politik, coding, curhat).
+
+CONTOH:
+- "Tampilkan nasabah saldo tertinggi" -> {"category": "SQL"}
+- "Halo apa kabar" -> {"category": "CHAT"}
+- "Cara masak rendang" -> {"category": "OFF_TOPIC"}
+- "Siapa kamu?" -> {"category": "CHAT"}
+- "Total tabungan Budi" -> {"category": "SQL"}
+
+Input User: "%s"
+
+JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
+`
+	finalPrompt := fmt.Sprintf(systemPrompt, userInput)
+	rawResponse, err := callGroqAPI(finalPrompt, "llama-3.1-8b-instant", 0.0)
+	if err != nil {
+		return "SQL", nil
+	}
+	var result IntentResponse
+	cleanJSON := strings.TrimSpace(rawResponse)
+	cleanJSON = strings.ReplaceAll(cleanJSON, "```json", "")
+	cleanJSON = strings.ReplaceAll(cleanJSON, "```", "")
+
+	if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
+		log.Printf("⚠️ Gagal parse intent JSON: %v. Raw: %s", err, rawResponse)
+		return "SQL", nil
+	}
+
+	log.Printf("ROUTER DECISION: [%s] untuk input '%s'", result.Category, userInput)
+	return result.Category, nil
 }

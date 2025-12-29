@@ -19,7 +19,7 @@ func RegisterRoutes() {
 	// Kita bungkus HandleDynamicQuery dengan AuthMiddleware
 
 	http.HandleFunc("/api/feedback/koreksi", AuthMiddleware(HandleFeedbackKoreksi))
-	http.HandleFunc("/admin/retrain", AuthMiddleware(HandleAdminRetrain))
+	http.HandleFunc("/admin/retrain", HandleAdminRetrain)
 	http.HandleFunc("/admin/qdrant/list", HandleAdminListQdrant)
 	http.HandleFunc("/admin/qdrant/delete", HandleAdminDeleteQdrant)
 	http.HandleFunc("/admin/cache/create", HandleAdminCacheCreate)
