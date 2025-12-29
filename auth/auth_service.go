@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"context"
@@ -8,6 +8,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	config "go-bank-api/config"
+	database "go-bank-api/database"
+	utils "go-bank-api/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
@@ -49,7 +53,7 @@ func CheckPasswordHash(password, hash string) bool {
 }
 
 func RegisterUser(req RegisterRequest) error {
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return errors.New("database belum terkoneksi")
 	}
 
@@ -65,7 +69,7 @@ func RegisterUser(req RegisterRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = DbInstance.ExecContext(ctx, query, req.Username, hashedPwd, req.FullName, req.Email)
+	_, err = database.DbInstance.ExecContext(ctx, query, req.Username, hashedPwd, req.FullName, req.Email)
 	if err != nil {
 		if strings.Contains(err.Error(), "ORA-00001") {
 			return errors.New("username sudah digunakan")
@@ -87,7 +91,7 @@ func LoginUser(req LoginRequest) (string, error) {
 		return "", errors.New("password tidak boleh kosong")
 	}
 
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return "", errors.New("database belum terkoneksi")
 	}
 
@@ -100,7 +104,7 @@ func LoginUser(req LoginRequest) (string, error) {
 		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active 
 		FROM app_users WHERE username = :1
 	`
-	err := DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
+	err := database.DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.FullName,
 		&isAdmin, &isActive,
 	)
@@ -127,7 +131,7 @@ func LoginUser(req LoginRequest) (string, error) {
 		"exp":      expTime.Unix(),
 	})
 
-	tokenString, err := token.SignedString([]byte(AppConfig.JWTSecret))
+	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
 		return "", err
 	}
@@ -135,20 +139,20 @@ func LoginUser(req LoginRequest) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = DbInstance.ExecContext(ctx, "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1", user.ID)
+	_, err = database.DbInstance.ExecContext(ctx, "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1", user.ID)
 	if err != nil {
 		log.Printf("[AUTH] WARNING: Gagal update last_login: %v", err)
 	}
-	
-	_, err = DbInstance.ExecContext(ctx, "DELETE FROM user_sessions WHERE id_app_users = :1 AND device_info = :2", user.ID, req.UserAgent)
+
+	_, err = database.DbInstance.ExecContext(ctx, "DELETE FROM user_sessions WHERE id_app_users = :1 AND device_info = :2", user.ID, req.UserAgent)
 	if err != nil {
 		log.Printf("[AUTH] Warning: Gagal Hapus sesi lama: %v", err)
 	}
-_, err = DbInstance.ExecContext(ctx, `
+	_, err = database.DbInstance.ExecContext(ctx, `
 		INSERT INTO user_sessions (id_app_users, token, device_info, ip_address, expires_at)
 		VALUES (:1, :2, :3, :4, :5)
 	`, user.ID, tokenString, req.UserAgent, req.IPAddress, expTime)
-	
+
 	if err != nil {
 		log.Printf("[AUTH] Error Critical: Gagal simpan sesi: %v", err)
 		return "", errors.New("gagal membuat sesi login")
@@ -162,13 +166,13 @@ _, err = DbInstance.ExecContext(ctx, `
 
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		frontendURL := "http://localhost:3084" 
-	
+		frontendURL := "http://localhost:3084"
+
 		w.Header().Set("Access-Control-Allow-Origin", frontendURL)
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		
+
 		if r.Method == http.MethodOptions {
 			next(w, r)
 			return
@@ -191,7 +195,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		if tokenString == "" {
-			sendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token diperlukan")
+			utils.SendError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token diperlukan")
 			return
 		}
 
@@ -199,35 +203,35 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("metode signing tidak valid")
 			}
-			return []byte(AppConfig.JWTSecret), nil
+			return []byte(config.AppConfig.JWTSecret), nil
 		})
 
 		if err != nil || !token.Valid {
-			sendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token tidak valid")
+			utils.SendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token tidak valid")
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok || !token.Valid {
-			sendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token claims tidak valid")
+			utils.SendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token claims tidak valid")
 			return
 		}
 
-		if DbInstance != nil {
+		if database.DbInstance != nil {
 			var exists int
-			
+
 			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP"
-			
-			err := DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
-			
+
+			err := database.DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
+
 			if err != nil {
 				log.Printf("DB Session Error: %v", err)
-				sendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
+				utils.SendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
 				return
 			}
-			
+
 			if exists == 0 {
-				sendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi berakhir")
+				utils.SendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi berakhir")
 				return
 			}
 		}
@@ -237,10 +241,10 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func LogoutUser(tokenString string) error {
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return nil
 	}
 	query := "DELETE FROM user_sessions WHERE token = :1"
-	_, err := DbInstance.Exec(query, tokenString)
+	_, err := database.DbInstance.Exec(query, tokenString)
 	return err
 }

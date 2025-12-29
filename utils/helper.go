@@ -1,13 +1,14 @@
-package main
+package utils
 
 import (
 	"encoding/json"
-	"net/http"
+	models "go-bank-api/models"
 	"log"
+	"net/http"
 )
 
-func sendSuccess(w http.ResponseWriter, data interface{}) {
-	resp := QueryResponse{
+func SendSuccess(w http.ResponseWriter, data interface{}) {
+	resp := models.QueryResponse{
 		Status:  "success",
 		Message: "Query berhasil dieksekusi",
 		Data:    data,
@@ -19,8 +20,8 @@ func sendSuccess(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-func sendAmbiguous(w http.ResponseWriter, message string, suggestions []string) {
-	resp := QueryResponse{
+func SendAmbiguous(w http.ResponseWriter, message string, suggestions []string) {
+	resp := models.QueryResponse{
 		Status:      "ambiguous",
 		Message:     message,
 		Suggestions: suggestions,
@@ -32,8 +33,8 @@ func sendAmbiguous(w http.ResponseWriter, message string, suggestions []string) 
 	}
 }
 
-func sendError(w http.ResponseWriter, statusCode int, code, message string, details ...string) {
-	resp := QueryResponse{
+func SendError(w http.ResponseWriter, statusCode int, code, message string, details ...string) {
+	resp := models.QueryResponse{
 		Status:      "error",
 		Message:     message,
 		ErrorCode:   code,

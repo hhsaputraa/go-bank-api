@@ -1,9 +1,15 @@
-package main
+package controllers
 
 import (
 	"encoding/json"
 	"fmt"
+	ai "go-bank-api/ai"
+	auth "go-bank-api/auth"
+	config "go-bank-api/config"
+	database "go-bank-api/database"
 	logger "go-bank-api/log"
+	models "go-bank-api/models"
+	utils "go-bank-api/utils"
 	"log"
 	"net/http"
 	"regexp"
@@ -64,18 +70,18 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
 		return
 	}
-	var req PromptRequest
+	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "INVALID_JSON", "Format JSON tidak valid")
+		utils.SendError(w, http.StatusBadRequest, "INVALID_JSON", "Format JSON tidak valid")
 		return
 	}
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
-		sendError(w, http.StatusBadRequest, "EMPTY_PROMPT", "Prompt tidak boleh kosong")
+		utils.SendError(w, http.StatusBadRequest, "EMPTY_PROMPT", "Prompt tidak boleh kosong")
 		return
 	}
 
@@ -92,12 +98,12 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima Prompt (Normalized): %s", normalizedPrompt)
 
-	if isAbsurd, err := IsAbsurdPrompt(r.Context(), normalizedPrompt); err != nil {
+	if isAbsurd, err := ai.IsAbsurdPrompt(r.Context(), normalizedPrompt); err != nil {
 		log.Printf("Error cek absurd: %v", err)
-		sendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
+		utils.SendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
 		return
 	} else if isAbsurd {
-		sendAmbiguous(w, "Pertanyaan kurang jelas", []string{
+		utils.SendAmbiguous(w, "Pertanyaan kurang jelas", []string{
 			"ada berapa orang penabung saat ini",
 			"nasabah yang jenis tabungan nya deposito",
 		})
@@ -108,17 +114,17 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		finalStatus = "BLOCKED"
 		finalError = err
 		log.Printf("SECURITY BLOCK: %v", err)
-		sendError(w, http.StatusForbidden, "DANGEROUS_INTENT", err.Error())
+		utils.SendError(w, http.StatusForbidden, "DANGEROUS_INTENT", err.Error())
 		return
 	}
 
-	aiResp, err := GetSQL(normalizedPrompt)
+	aiResp, err := ai.GetSQL(normalizedPrompt)
 	if err != nil {
-		if appErr, ok := err.(*AppError); ok {
+		if appErr, ok := err.(*models.AppError); ok {
 			if appErr.Code == "CHIT_CHAT" {
 				detectedIntent = "CHAT/OFF_TOPIC"
 				finalStatus = "SUCCESS"
-				sendError(w, http.StatusBadRequest, "CHAT_RESPONSE", appErr.Message)
+				utils.SendError(w, http.StatusBadRequest, "CHAT_RESPONSE", appErr.Message)
 				return
 
 			}
@@ -130,40 +136,40 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 			}
 			detectedIntent = "SQL_ATTEMPT"
 			finalError = appErr
-			sendError(w, statusCode, appErr.Code, appErr.Message)
+			utils.SendError(w, statusCode, appErr.Code, appErr.Message)
 			return
 		}
 
 		log.Printf("AI gagal generate SQL (System Error): %v", err)
-		sendError(w, http.StatusInternalServerError, "AI_GENERATION_FAILED", "Gagal menghasilkan query SQL")
+		utils.SendError(w, http.StatusInternalServerError, "AI_GENERATION_FAILED", "Gagal menghasilkan query SQL")
 		return
 	}
 
 	if aiResp.IsAmbiguous {
 		detectedIntent = "AMBIGUOUS"
 		finalStatus = "SUCCESS"
-		sendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
+		utils.SendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
 		return
 	}
 	if strings.TrimSpace(aiResp.SQL) == "" {
 		finalStatus = "FAILED"
-		sendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
+		utils.SendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
 		return
 	}
 	detectedIntent = "SQL"
 	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
-	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
+	data, execErr := ai.ExecuteDynamicQuery(aiResp.SQL, nil)
 
 	if execErr != nil {
 		log.Printf("⚠️ Eksekusi Gagal: %v. Mencoba Self-Correction...", execErr)
 
-		fixedSQL, repairErr := RepairSQLFromAI(aiResp.PromptAsli, aiResp.SQL, execErr.Error())
+		fixedSQL, repairErr := ai.RepairSQLFromAI(aiResp.PromptAsli, aiResp.SQL, execErr.Error())
 
 		if repairErr == nil {
 			log.Printf("🔄 Mencoba eksekusi SQL Perbaikan: %s", fixedSQL)
-			dataRetry, execErrRetry := ExecuteDynamicQuery(fixedSQL, nil)
+			dataRetry, execErrRetry := ai.ExecuteDynamicQuery(fixedSQL, nil)
 
 			if execErrRetry == nil {
 				log.Println("Self-Correction Berhasil menyelamatkan request!")
@@ -183,17 +189,17 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		finalStatus = "DB_ERROR"
 		finalError = execErr
 		log.Printf("FATAL: Query Gagal Total | SQL: %s", aiResp.SQL)
-		sendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
+		utils.SendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
 			"Query tidak dapat dieksekusi. Sistem mencoba memperbaiki otomatis namun gagal.",
 			execErr.Error())
 		return
 	}
 	finalStatus = "SUCCESS"
 	if !aiResp.IsCached {
-		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
+		go ai.SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
 	}
 
-	sendSuccess(w, data)
+	utils.SendSuccess(w, data)
 }
 
 func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +215,7 @@ func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req FeedbackRequest
+	var req models.FeedbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Request body JSON tidak valid")
 		return
@@ -225,7 +231,7 @@ func HandleFeedbackKoreksi(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima Feedback Koreksi Baru. Prompt: %s", promptAsli)
 
-	if err := AddSqlExample(promptAsli, sqlKoreksi); err != nil {
+	if err := ai.AddSqlExample(promptAsli, sqlKoreksi); err != nil {
 		log.Printf("ERROR: Gagal menyimpan feedback: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan feedback ke database")
 		return
@@ -247,7 +253,7 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		log.Println("ADMIN: training RAG (Embedding) dimulai")
-		mainTrain()
+		ai.MainTrain()
 	}()
 
 	respondWithJSON(w, http.StatusAccepted, map[string]string{
@@ -270,7 +276,7 @@ func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := GetAllQdrantPoints(collectionName, 1000)
+	data, err := ai.GetAllQdrantPoints(collectionName, 1000)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -337,7 +343,7 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ManualInjectCache(req.Prompt, req.SQL); err != nil {
+	if err := ai.ManualInjectCache(req.Prompt, req.SQL); err != nil {
 		log.Printf("Gagal inject cache: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Gagal menyimpan ke cache: "+err.Error())
 		return
@@ -390,7 +396,7 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := UpdateQdrantPoint(req.Collection, req.ID, req.Prompt, req.SQL); err != nil {
+	if err := ai.UpdateQdrantPoint(req.Collection, req.ID, req.Prompt, req.SQL); err != nil {
 		respondWithError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -433,8 +439,8 @@ func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
 
 	targetCollection := req.Collection
 	if targetCollection == "" {
-		if AppConfig != nil {
-			targetCollection = AppConfig.QdrantCacheCollection
+		if config.AppConfig != nil {
+			targetCollection = config.AppConfig.QdrantCacheCollection
 		} else {
 			targetCollection = "bpr_supra_cache"
 		}
@@ -442,7 +448,7 @@ func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima request delete untuk ID: %s di Collection: %s", req.ID, targetCollection)
 
-	err := DeleteQdrantPoint(r.Context(), targetCollection, req.ID)
+	err := ai.DeleteQdrantPoint(r.Context(), targetCollection, req.ID)
 	if err != nil {
 		log.Printf("Error deleting Qdrant point: %v", err)
 		http.Error(w, fmt.Sprintf("Gagal menghapus: %v", err), http.StatusInternalServerError)
@@ -475,27 +481,27 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
 		return
 	}
 
-	var req RegisterRequest
+	var req auth.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
 		return
 	}
 
 	if req.Username == "" || req.Password == "" {
-		sendError(w, http.StatusBadRequest, "INVALID_DATA", "Username dan Password wajib diisi")
+		utils.SendError(w, http.StatusBadRequest, "INVALID_DATA", "Username dan Password wajib diisi")
 		return
 	}
 
-	if err := RegisterUser(req); err != nil {
-		sendError(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
+	if err := auth.RegisterUser(req); err != nil {
+		utils.SendError(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
 		return
 	}
 
-	sendSuccess(w, map[string]string{"message": "Registrasi berhasil. Silakan login."})
+	utils.SendSuccess(w, map[string]string{"message": "Registrasi berhasil. Silakan login."})
 }
 
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
@@ -509,40 +515,40 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
 		return
 	}
 
-	var req LoginRequest
+	var req auth.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
 		return
 	}
 
-	plainUsername, err := DecryptField(req.Username)
+	plainUsername, err := utils.DecryptField(req.Username)
 	if err != nil {
 		fmt.Printf("[Security] Gagal dekripsi username: %v\n", err)
-		sendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Username)")
+		utils.SendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Username)")
 		return
 	}
 	req.Username = plainUsername
 
-	plainPassword, err := DecryptField(req.Password)
+	plainPassword, err := utils.DecryptField(req.Password)
 	if err != nil {
 		fmt.Printf("[Security] Gagal dekripsi password: %v\n", err)
-		sendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Password)")
+		utils.SendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Password)")
 		return
 	}
 	req.Password = plainPassword
 	req.UserAgent = r.UserAgent()
 	req.IPAddress = r.RemoteAddr
 
-	token, err := LoginUser(req)
+	token, err := auth.LoginUser(req)
 	if err != nil {
-		sendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
+		utils.SendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
 		return
 	}
-	isProduction := AppConfig.AppEnv == "priduction"
+	isProduction := config.AppConfig.AppEnv == "priduction"
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
@@ -554,7 +560,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	sendSuccess(w, map[string]string{
+	utils.SendSuccess(w, map[string]string{
 		"message": "Login berhasil",
 	})
 }
@@ -573,7 +579,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		sendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
 		return
 	}
 	var tokenString string
@@ -592,13 +598,13 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if tokenString != "" {
-		if err := LogoutUser(tokenString); err != nil {
+		if err := auth.LogoutUser(tokenString); err != nil {
 
 			log.Printf("Warning: Gagal menghapus sesi dari DB: %v", err)
 		}
 	}
 
-	isProduction := AppConfig.AppEnv == "production"
+	isProduction := config.AppConfig.AppEnv == "production"
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
@@ -609,7 +615,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   isProduction,
 	})
-	sendSuccess(w, map[string]string{
+	utils.SendSuccess(w, map[string]string{
 		"message": "Logout berhasil. Sesi telah dihapus.",
 	})
 }
@@ -654,7 +660,7 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query DB
-	var user User
+	var user auth.User
 	var isAdminInt, isActiveInt int
 
 	// Sesuaikan nama kolom dengan tabel Anda
@@ -663,7 +669,7 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 		FROM app_users 
 		WHERE id_app_users = :1
 	`
-	err := DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
+	err := database.DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
 		&user.ID, &user.Username, &user.FullName, &user.Email,
 		&isAdminInt, &isActiveInt, &user.LastLoginAt,
 	)
@@ -702,7 +708,7 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req EnhanceRequest
+	var req models.EnhanceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Format JSON tidak valid")
 		return
@@ -715,7 +721,7 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("✨ Enhancing prompt: '%s'...", req.DraftPrompt)
 
-	enhancedText, err := EnhanceNaturalLanguage(req.DraftPrompt)
+	enhancedText, err := ai.EnhanceNaturalLanguage(req.DraftPrompt)
 	if err != nil {
 		log.Printf("❌ Gagal enhance prompt: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "Gagal memperjelas teks (AI Error)")
@@ -724,7 +730,7 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("✅ Hasil Enhance: '%s'", enhancedText)
 
-	respondWithJSON(w, http.StatusOK, EnhanceResponse{
+	respondWithJSON(w, http.StatusOK, models.EnhanceResponse{
 		EnhancedPrompt: enhancedText,
 	})
 }

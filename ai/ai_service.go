@@ -1,4 +1,4 @@
-package main
+package ai
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	config "go-bank-api/config"
+	models "go-bank-api/models"
 	"io"
 	"log"
 	"net/http"
@@ -80,22 +82,22 @@ type IntentResponse struct {
 }
 
 func InitVectorService() error {
-	if AppConfig == nil {
+	if config.AppConfig == nil {
 		return fmt.Errorf("konfigurasi aplikasi belum dimuat")
 	}
 
 	ctx := context.Background()
 
-	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(AppConfig.GoogleAPIKey))
+	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(config.AppConfig.GoogleAPIKey))
 	if err != nil {
 		return fmt.Errorf("gagal membuat client Gemini: %w", err)
 	}
-	geminiEmbedder = geminiClient.EmbeddingModel(AppConfig.EmbeddingModel)
+	geminiEmbedder = geminiClient.EmbeddingModel(config.AppConfig.EmbeddingModel)
 
 	client, err := pb.NewClient(&pb.Config{
-		Host:   AppConfig.QdrantGRPCHost,
-		Port:   AppConfig.QdrantGRPCPort,
-		APIKey: AppConfig.QdrantAPIKey,
+		Host:   config.AppConfig.QdrantGRPCHost,
+		Port:   config.AppConfig.QdrantGRPCPort,
+		APIKey: config.AppConfig.QdrantAPIKey,
 		UseTLS: true,
 	})
 	if err != nil {
@@ -103,16 +105,16 @@ func InitVectorService() error {
 	}
 	qdrantClient = client
 
-	log.Printf("Memastikan collection cache '%s' ada via REST...", AppConfig.QdrantCacheCollection)
-	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
+	log.Printf("Memastikan collection cache '%s' ada via REST...", config.AppConfig.QdrantCacheCollection)
+	if err := qdrantCreateCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
-	if err := qdrantCreateCollection(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, AppConfig.EmbeddingVectorSize, AppConfig.QdrantDistanceMetric); err != nil {
+	if err := qdrantCreateCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName, config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
 		return fmt.Errorf("gagal membuat/memverifikasi RAG collection: %w", err)
 	}
 
 	log.Println("Memastikan index payload 'category' tersedia...")
-	if err := qdrantCreatePayloadIndex(ctx, AppConfig.QdrantURL, AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
+	if err := qdrantCreatePayloadIndex(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
 		log.Printf("Warning: Gagal membuat index payload: %v", err)
 	}
 
@@ -120,26 +122,26 @@ func InitVectorService() error {
 	return nil
 }
 
-func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
+func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {
 	if isDangerousSQL(userPrompt) {
 		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
-		return AISqlResponse{}, &AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
+		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
 	}
-	if AppConfig == nil {
-		return AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
+	if config.AppConfig == nil {
+		return models.AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
 	}
 
 	intent, _ := ClassifyIntent(userPrompt)
 
 	if intent == "CHAT" {
-		return AISqlResponse{}, &AppError{
+		return models.AISqlResponse{}, &models.AppError{
 			Code:    "CHIT_CHAT",
 			Message: "Halo! Saya Asisten Data Bank Supra. Silakan tanya seputar Perbankan.",
 		}
 	}
 
 	if intent == "OFF_TOPIC" {
-		return AISqlResponse{}, &AppError{
+		return models.AISqlResponse{}, &models.AppError{
 			Code:    "CHIT_CHAT",
 			Message: "Maaf, saya hanya bisa menjawab pertanyaan seputar Perbankan. Tidak bisa melayani topik lain.",
 		}
@@ -150,7 +152,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	promptVector, err := GenerateEmbedding(userPrompt)
 	if err != nil {
-		return AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
+		return models.AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
 	}
 
 	hardHit, softCacheContext, err := checkSemanticCache(ctx, promptVector)
@@ -165,7 +167,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	allDDLString, err := getDDLContext(ctx, promptVector)
 	if err != nil {
-		return AISqlResponse{}, err
+		return models.AISqlResponse{}, err
 	}
 	refDataString, _ := GetDynamicReferenceData(ctx)
 	businessDict, _ := GetBusinessDictionary(ctx)
@@ -174,7 +176,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	rawContent, err := fetchLLMResponse(ctx, finalPrompt)
 	if err != nil {
-		return AISqlResponse{}, err
+		return models.AISqlResponse{}, err
 	}
 
 	sqlQuery := extractSQLFromMarkdown(rawContent)
@@ -183,10 +185,10 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 
 	sqlQuery = sanitizeSQL(sqlQuery)
 	if sqlQuery == "" {
-		return AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
+		return models.AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
 	}
 
-	return AISqlResponse{
+	return models.AISqlResponse{
 		SQL:        sqlQuery,
 		Vector:     promptVector,
 		PromptAsli: userPrompt,
@@ -195,7 +197,7 @@ func getSQLFromAI_Groq(userPrompt string) (AISqlResponse, error) {
 }
 
 func EnhanceNaturalLanguage(draft string) (string, error) {
-	if AppConfig.GroqAPIKey == "" {
+	if config.AppConfig.GroqAPIKey == "" {
 		return "", fmt.Errorf("API Key Groq belum diset")
 	}
 
@@ -218,7 +220,7 @@ Output:`
 }
 
 func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
-	if AppConfig == nil {
+	if config.AppConfig == nil {
 		return "", fmt.Errorf("konfigurasi belum dimuat")
 	}
 	log.Println("Memulai Self-Correction AI...")
@@ -234,7 +236,7 @@ ATURAN:
 2. Langsung berikan SQL yang diperbaiki dalam blok markdown code.
 `, promptAsli, sqlSalah, pesanError)
 
-	rawContent, err := callGroqAPI(systemPrompt, AppConfig.GroqModel, 0.1)
+	rawContent, err := callGroqAPI(systemPrompt, config.AppConfig.GroqModel, 0.1)
 	if err != nil {
 		return "", err
 	}
@@ -265,11 +267,11 @@ func GenerateEmbedding(text string) ([]float32, error) {
 	return res.Embedding.Values, nil
 }
 
-func checkSemanticCache(ctx context.Context, vector []float32) (*AISqlResponse, string, error) {
+func checkSemanticCache(ctx context.Context, vector []float32) (*models.AISqlResponse, string, error) {
 	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
-	searchReq := qdrantSearchReq{Vector: vector, Limit: AppConfig.CacheSearchLimit, WithPayload: true}
+	searchReq := qdrantSearchReq{Vector: vector, Limit: config.AppConfig.CacheSearchLimit, WithPayload: true}
 
-	cacheResponse, err := qdrantSearchPoints(ctx, AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, searchReq)
+	cacheResponse, err := qdrantSearchPoints(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, searchReq)
 	if err != nil {
 		return nil, "", err
 	}
@@ -281,9 +283,9 @@ func checkSemanticCache(ctx context.Context, vector []float32) (*AISqlResponse, 
 		cachedSql, _ := cachedPoint.Payload["sql_query"].(string)
 		cachedPrompt, _ := cachedPoint.Payload["prompt_asli"].(string)
 
-		if topScore >= AppConfig.CacheSimilarityThreshold {
+		if topScore >= config.AppConfig.CacheSimilarityThreshold {
 			log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f", topScore)
-			return &AISqlResponse{SQL: cachedSql, IsCached: true}, "", nil
+			return &models.AISqlResponse{SQL: cachedSql, IsCached: true}, "", nil
 		}
 
 		if topScore >= 0.80 {
@@ -301,7 +303,7 @@ func checkSemanticCache(ctx context.Context, vector []float32) (*AISqlResponse, 
 func getRAGContext(ctx context.Context, vector []float32) string {
 	var searchLimit uint64 = 10
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
-		CollectionName: AppConfig.QdrantCollectionName,
+		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(vector...),
 		WithPayload:    pb.NewWithPayload(true),
 		Limit:          &searchLimit,
@@ -347,11 +349,11 @@ func getDDLContext(ctx context.Context, vector []float32) (string, error) {
 }
 
 func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
-	if AppConfig != nil && AppConfig.OllamaURL != "" {
+	if config.AppConfig != nil && config.AppConfig.OllamaURL != "" {
 		log.Printf("Mencoba Ollama LLM lokal...")
-		ollamaReq := map[string]any{"model": AppConfig.OllamaModel, "prompt": prompt, "stream": false}
+		ollamaReq := map[string]any{"model": config.AppConfig.OllamaModel, "prompt": prompt, "stream": false}
 
-		_, respBody, err := httpDoJSON(ctx, "POST", strings.TrimRight(AppConfig.OllamaURL, "/")+"/api/generate", ollamaReq)
+		_, respBody, err := httpDoJSON(ctx, "POST", strings.TrimRight(config.AppConfig.OllamaURL, "/")+"/api/generate", ollamaReq)
 		if err == nil {
 			var oResp map[string]any
 			if json.Unmarshal(respBody, &oResp) == nil {
@@ -365,7 +367,7 @@ func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
 	}
 
 	log.Println("Menggunakan Layanan Groq AI...")
-	return callGroqAPI(prompt, AppConfig.GroqModel, 0.0)
+	return callGroqAPI(prompt, config.AppConfig.GroqModel, 0.0)
 }
 
 func callGroqAPI(prompt string, model string, temp float32) (string, error) {
@@ -376,14 +378,14 @@ func callGroqAPI(prompt string, model string, temp float32) (string, error) {
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 
-	req, err := http.NewRequest("POST", AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+AppConfig.GroqAPIKey)
+	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: AppConfig.GroqTimeout}
+	client := &http.Client{Timeout: config.AppConfig.GroqTimeout}
 	if client.Timeout == 0 {
 		client.Timeout = 30 * time.Second
 	}
@@ -505,7 +507,7 @@ func sanitizeSQL(sql string) string {
 func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, error) {
 	var limit uint64 = 5
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
-		CollectionName: AppConfig.QdrantCollectionName,
+		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
 		Limit:          &limit,
@@ -536,7 +538,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 
 func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 	go func() {
-		if AppConfig == nil {
+		if config.AppConfig == nil {
 			return
 		}
 		log.Println("Menyimpan ke Semantic Cache...")
@@ -544,7 +546,7 @@ func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 			ID: uuid.NewString(), Vector: promptVector,
 			Payload: map[string]interface{}{"prompt_asli": promptAsli, "sql_query": sqlQuery},
 		}
-		if err := qdrantUpsertPoints(context.Background(), AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{point}); err == nil {
+		if err := qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point}); err == nil {
 			log.Println("Berhasil update cache.")
 		}
 	}()
@@ -559,7 +561,7 @@ func ManualInjectCache(promptAsli string, sqlQuery string) error {
 		ID: uuid.NewString(), Vector: vec,
 		Payload: map[string]interface{}{"prompt_asli": promptAsli, "sql_query": sqlQuery},
 	}
-	return qdrantUpsertPoints(context.Background(), AppConfig.QdrantURL, AppConfig.QdrantCacheCollection, []qdrantPoint{point})
+	return qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point})
 }
 
 func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Response, []byte, error) {
@@ -576,8 +578,8 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if AppConfig != nil && AppConfig.QdrantAPIKey != "" {
-		req.Header.Set("api-key", AppConfig.QdrantAPIKey)
+	if config.AppConfig != nil && config.AppConfig.QdrantAPIKey != "" {
+		req.Header.Set("api-key", config.AppConfig.QdrantAPIKey)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -648,7 +650,7 @@ func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fiel
 }
 
 func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
-	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", AppConfig.QdrantURL, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", config.AppConfig.QdrantURL, collectionName)
 	req := map[string]any{"points": []string{pointID}}
 	resp, body, err := httpDoJSON(ctx, "POST", url, req)
 	if err != nil {
@@ -670,7 +672,7 @@ func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery
 		ID: id, Vector: vector,
 		Payload: map[string]interface{}{"prompt_asli": prompt, "sql_query": sqlQuery},
 	}
-	return qdrantUpsertPoints(context.Background(), AppConfig.QdrantURL, collectionName, []qdrantPoint{point})
+	return qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, collectionName, []qdrantPoint{point})
 }
 
 func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataResponse, error) {

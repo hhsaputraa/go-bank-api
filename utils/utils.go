@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"crypto/aes"
@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	config "go-bank-api/config"
 )
 
 // PKCS7Unpadding: Menghapus padding standar
@@ -24,7 +25,7 @@ func PKCS7Unpadding(src []byte) ([]byte, error) {
 // DecryptField: Mendekripsi string Hex dari Frontend
 func DecryptField(hexString string) (string, error) {
 	// 1. Ambil Key dari Config
-	key := []byte(AppConfig.AESKey)
+	key := []byte(config.AppConfig.AESKey)
 
 	// 2. Decode Hex String ke Byte
 	data, err := hex.DecodeString(hexString)

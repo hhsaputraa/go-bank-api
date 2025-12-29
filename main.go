@@ -1,7 +1,11 @@
 package main
 
 import (
+	ai "go-bank-api/ai"
+	config "go-bank-api/config"
+	database "go-bank-api/database"
 	logger "go-bank-api/log"
+	routes "go-bank-api/routes"
 	"log"
 	"net/http"
 	"time"
@@ -18,14 +22,14 @@ func main() {
 	}
 
 	// Load configuration from environment variables
-	_, err = LoadConfig()
+	_, err = config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Fatal Error: Gagal memuat konfigurasi: %v", err)
 	}
 	log.Println("✅ Konfigurasi berhasil dimuat dari environment variables")
 
 	// Connect to database
-	err = ConnectDB()
+	err = database.ConnectDB()
 	if err != nil {
 		log.Fatalf("Fatal Error: Gagal koneksi ke database. %v", err)
 	}
@@ -33,16 +37,16 @@ func main() {
 	defer logger.CloseLogger()
 
 	// Initialize vector service (Qdrant + Google AI)
-	if err := InitVectorService(); err != nil {
+	if err := ai.InitVectorService(); err != nil {
 		log.Fatalf("Fatal Error: Gagal koneksi ke Qdrant (Database Vektor): %v", err)
 	}
 
 	// Register HTTP routes
 	log.Println("Aplikasi siap berjalan...")
-	RegisterRoutes()
+	routes.RegisterRoutes()
 
 	srv := &http.Server{
-		Addr:              ":" + AppConfig.ServerPort,
+		Addr:              ":" + config.AppConfig.ServerPort,
 		Handler:           nil,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Second,

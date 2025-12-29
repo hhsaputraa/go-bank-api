@@ -1,9 +1,12 @@
-package main
+package ai
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	config "go-bank-api/config"
+	database "go-bank-api/database"
+	models "go-bank-api/models"
 	"log"
 	"strings"
 	"time"
@@ -14,15 +17,15 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
-func GetSQL(userPrompt string) (AISqlResponse, error) {
+func GetSQL(userPrompt string) (models.AISqlResponse, error) {
 	log.Println("Memanggil AI Service (dengan semantic cache)...")
 
-	aiResp, err := getSQLFromAI_Groq(userPrompt)
+	aiResp, err := GetSQLFromAI_Groq(userPrompt)
 	if err != nil {
-		return AISqlResponse{}, err
+		return models.AISqlResponse{}, err
 	}
 	if aiResp.SQL == "" && !aiResp.IsAmbiguous {
-		return AISqlResponse{}, errors.New("AI tidak mengembalikan query SQL.")
+		return models.AISqlResponse{}, errors.New("AI tidak mengembalikan query SQL.")
 	}
 
 	return aiResp, nil
@@ -56,14 +59,14 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	}
 
 	timeout := 10 * time.Second
-	if AppConfig != nil {
-		timeout = AppConfig.QueryTimeout
+	if config.AppConfig != nil {
+		timeout = config.AppConfig.QueryTimeout
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	tx, err := DbInstance.BeginTx(ctx, nil)
+	tx, err := database.DbInstance.BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("gagal memulai transaksi database: %w", err)
 	}

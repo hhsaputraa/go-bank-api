@@ -1,8 +1,10 @@
-package main
+package ai
 
 import (
 	"context"
 	"fmt"
+	database "go-bank-api/database"
+	models "go-bank-api/models"
 	"log"
 	"net/url"
 	"os"
@@ -58,11 +60,11 @@ func GetDynamicSchemaContext() ([]string, error) {
 	   column_id
 	 `
 
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return nil, fmt.Errorf("koneksi database (DbInstance) belum siap")
 	}
 
-	rows, err := DbInstance.QueryContext(context.Background(), query, schema)
+	rows, err := database.DbInstance.QueryContext(context.Background(), query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("gagal query information_schema: %w", err)
 	}
@@ -110,7 +112,7 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 		"master_tipe_transaksi":  "nama_transaksi",
 	}
 
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return "", fmt.Errorf("koneksi database belum siap")
 	}
 
@@ -141,7 +143,7 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 
 		query := fmt.Sprintf("SELECT %s, %s FROM %s.%s ORDER BY %s ASC", idCol, nameCol, schema, tableName, idCol)
 
-		rows, err := DbInstance.QueryContext(ctx, query)
+		rows, err := database.DbInstance.QueryContext(ctx, query)
 		if err != nil {
 			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v (Query: %s)", tableName, err, query)
 			continue
@@ -171,9 +173,9 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 	return builder.String(), nil
 }
 
-func GetDynamicSqlExamples() ([]SqlExample, error) {
+func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
 	}
 
@@ -197,14 +199,14 @@ func GetDynamicSqlExamples() ([]SqlExample, error) {
 
 	query := strings.TrimSpace(rawQuery)
 
-	rows, err := DbInstance.QueryContext(context.Background(), query)
+	rows, err := database.DbInstance.QueryContext(context.Background(), query)
 	if err != nil {
 		log.Printf("Query Gagal: %s", query)
 		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
 	}
 	defer rows.Close()
 
-	var contexts []SqlExample
+	var contexts []models.SqlExample
 
 	for rows.Next() {
 		var promptExample, sqlExample string
@@ -213,7 +215,7 @@ func GetDynamicSqlExamples() ([]SqlExample, error) {
 		}
 
 		fullContekan := fmt.Sprintf("%s\n%s", promptExample, sqlExample)
-		contexts = append(contexts, SqlExample{
+		contexts = append(contexts, models.SqlExample{
 			FullContent: fullContekan,
 			PromptOnly:  promptExample,
 		})
@@ -228,7 +230,7 @@ func GetDynamicSqlExamples() ([]SqlExample, error) {
 }
 
 func AddSqlExample(promptAsli string, sqlKoreksi string) error {
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return fmt.Errorf("koneksi database (DbInstance) belum siap")
 	}
 
@@ -250,7 +252,7 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
+	_, err = database.DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
 	if err != nil {
 		return fmt.Errorf("gagal insert contekan baru ke DB: %w", err)
 	}
@@ -273,7 +275,7 @@ func GetBusinessDictionary(ctx context.Context) (string, error) {
 
 	query := fmt.Sprintf("SELECT istilah, definisi_bisnis, logika_sql FROM %s.ai_dictionary", schema)
 
-	rows, err := DbInstance.QueryContext(ctx, query)
+	rows, err := database.DbInstance.QueryContext(ctx, query)
 	if err != nil {
 		return "", nil
 	}
@@ -302,7 +304,7 @@ type AbsurdKeyword struct {
 }
 
 func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
-	if DbInstance == nil {
+	if database.DbInstance == nil {
 		return false, fmt.Errorf("koneksi database (DbInstance) belum siap")
 	}
 	schema, err := getSchemaFromConnStr()
@@ -317,7 +319,7 @@ func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
 
 	var exists int
 
-	err = DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
+	err = database.DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
 	if err != nil {
 		log.Printf("Error query absurd_keywords: %v (Query: %s)", err, query)
 		return false, err
