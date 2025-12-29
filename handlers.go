@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	logger "go-bank-api/log"
 	"log"
 	"net/http"
 	"regexp"
@@ -53,6 +54,8 @@ func validateDangerousIntent(prompt string) error {
 	return nil
 }
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	clientIP := r.RemoteAddr
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -76,6 +79,17 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var (
+		detectedIntent string = "UKNOWN"
+		generatedSQL   string = ""
+		finalStatus    string = "FAILED"
+		finalError     error  = nil
+	)
+
+	defer func() {
+		logger.RecordActivity(clientIP, normalizedPrompt, detectedIntent, generatedSQL, finalStatus, finalError, time.Since(startTime))
+	}()
+
 	log.Printf("Menerima Prompt (Normalized): %s", normalizedPrompt)
 
 	if isAbsurd, err := IsAbsurdPrompt(r.Context(), normalizedPrompt); err != nil {
@@ -90,6 +104,9 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateDangerousIntent(normalizedPrompt); err != nil {
+		detectedIntent = "ATTACK"
+		finalStatus = "BLOCKED"
+		finalError = err
 		log.Printf("SECURITY BLOCK: %v", err)
 		sendError(w, http.StatusForbidden, "DANGEROUS_INTENT", err.Error())
 		return
@@ -98,13 +115,21 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	aiResp, err := GetSQL(normalizedPrompt)
 	if err != nil {
 		if appErr, ok := err.(*AppError); ok {
+			if appErr.Code == "CHIT_CHAT" {
+				detectedIntent = "CHAT/OFF_TOPIC"
+				finalStatus = "SUCCESS"
+				sendError(w, http.StatusBadRequest, "CHAT_RESPONSE", appErr.Message)
+				return
+
+			}
 			log.Printf("Handled Error: %s - %s", appErr.Code, appErr.Message)
 
 			statusCode := http.StatusInternalServerError
 			if appErr.Code == "DANGEROUS_INTENT" {
 				statusCode = http.StatusForbidden
 			}
-
+			detectedIntent = "SQL_ATTEMPT"
+			finalError = appErr
 			sendError(w, statusCode, appErr.Code, appErr.Message)
 			return
 		}
@@ -115,14 +140,18 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if aiResp.IsAmbiguous {
+		detectedIntent = "AMBIGUOUS"
+		finalStatus = "SUCCESS"
 		sendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
 		return
 	}
 	if strings.TrimSpace(aiResp.SQL) == "" {
+		finalStatus = "FAILED"
 		sendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
 		return
 	}
-
+	detectedIntent = "SQL"
+	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
 	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
@@ -142,6 +171,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 				data = dataRetry
 				execErr = nil
 				aiResp.SQL = fixedSQL
+				generatedSQL = fixedSQL
 			} else {
 				log.Printf("Self-Correction juga gagal: %v", execErrRetry)
 			}
@@ -150,13 +180,15 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if execErr != nil {
+		finalStatus = "DB_ERROR"
+		finalError = execErr
 		log.Printf("FATAL: Query Gagal Total | SQL: %s", aiResp.SQL)
 		sendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
 			"Query tidak dapat dieksekusi. Sistem mencoba memperbaiki otomatis namun gagal.",
 			execErr.Error())
 		return
 	}
-
+	finalStatus = "SUCCESS"
 	if !aiResp.IsCached {
 		go SaveToCache(aiResp.PromptAsli, aiResp.Vector, aiResp.SQL)
 	}

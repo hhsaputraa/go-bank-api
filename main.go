@@ -1,6 +1,7 @@
 package main
 
 import (
+	logger "go-bank-api/log"
 	"log"
 	"net/http"
 	"time"
@@ -9,7 +10,6 @@ import (
 )
 
 func main() {
-	// Load .env file
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Peringatan: Tidak bisa memuat file .env")
@@ -29,6 +29,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Fatal Error: Gagal koneksi ke database. %v", err)
 	}
+	logger.InitLogger()
+	defer logger.CloseLogger()
 
 	// Initialize vector service (Qdrant + Google AI)
 	if err := InitVectorService(); err != nil {
