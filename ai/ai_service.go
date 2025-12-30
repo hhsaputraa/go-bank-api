@@ -1,22 +1,19 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	config "go-bank-api/config"
 	models "go-bank-api/models"
-	"io"
+	utils "go-bank-api/utils"
 	"log"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
-	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/api/option"
 )
@@ -25,56 +22,6 @@ var (
 	qdrantClient   *pb.Client
 	geminiEmbedder *genai.EmbeddingModel
 )
-
-type GroqMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type GroqRequest struct {
-	Model       string        `json:"model"`
-	Messages    []GroqMessage `json:"messages"`
-	Temperature float32       `json:"temperature"`
-}
-
-type GroqResponse struct {
-	Choices []struct {
-		Message GroqMessage `json:"message"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
-}
-
-type qdrantPoint struct {
-	ID      string                 `json:"id"`
-	Vector  []float32              `json:"vector"`
-	Payload map[string]interface{} `json:"payload,omitempty"`
-}
-
-type qdrantSearchReq struct {
-	Vector         []float32 `json:"vector"`
-	Limit          uint64    `json:"limit"`
-	WithPayload    bool      `json:"with_payload"`
-	ScoreThreshold float32   `json:"score_threshold"`
-}
-
-type qdrantSearchResp struct {
-	Result []qdrantSearchResult `json:"result"`
-}
-
-type qdrantSearchResult struct {
-	ID      interface{}            `json:"id"`
-	Score   float32                `json:"score"`
-	Payload map[string]interface{} `json:"payload"`
-}
-
-type QdrantDataResponse struct {
-	ID      string                 `json:"id"`
-	Payload map[string]interface{} `json:"payload"`
-}
 
 type IntentResponse struct {
 	Category string `json:"category"`
@@ -123,7 +70,11 @@ func InitVectorService() error {
 }
 
 func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {
-	if isDangerousSQL(userPrompt) {
+	if utils.IsRawSQL(userPrompt) {
+		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
+		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
+	}
+	if err := utils.ValidateSafePrompt(userPrompt); err != nil {
 		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
 		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
 	}
@@ -251,22 +202,6 @@ ATURAN:
 	return fixedSQL, nil
 }
 
-func isDangerousSQL(input string) bool {
-	sqlPattern := regexp.MustCompile(`(?i)^\s*(select|insert|update|delete|drop|alter|truncate|create|grant|revoke|with)\b`)
-	return sqlPattern.MatchString(input)
-}
-
-func GenerateEmbedding(text string) ([]float32, error) {
-	if geminiEmbedder == nil {
-		return nil, fmt.Errorf("service embedding belum diinisialisasi")
-	}
-	res, err := geminiEmbedder.EmbedContent(context.Background(), genai.Text(text))
-	if err != nil {
-		return nil, err
-	}
-	return res.Embedding.Values, nil
-}
-
 func checkSemanticCache(ctx context.Context, vector []float32) (*models.AISqlResponse, string, error) {
 	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
 	searchReq := qdrantSearchReq{Vector: vector, Limit: config.AppConfig.CacheSearchLimit, WithPayload: true}
@@ -348,76 +283,8 @@ func getDDLContext(ctx context.Context, vector []float32) (string, error) {
 	return relevantDDL, nil
 }
 
-func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
-	if config.AppConfig != nil && config.AppConfig.OllamaURL != "" {
-		log.Printf("Mencoba Ollama LLM lokal...")
-		ollamaReq := map[string]any{"model": config.AppConfig.OllamaModel, "prompt": prompt, "stream": false}
-
-		_, respBody, err := httpDoJSON(ctx, "POST", strings.TrimRight(config.AppConfig.OllamaURL, "/")+"/api/generate", ollamaReq)
-		if err == nil {
-			var oResp map[string]any
-			if json.Unmarshal(respBody, &oResp) == nil {
-				if r, ok := oResp["response"].(string); ok && r != "" {
-					log.Println("✅ Sukses Ollama.")
-					return r, nil
-				}
-			}
-		}
-		log.Println("Ollama gagal/kosong. Beralih ke Groq.")
-	}
-
-	log.Println("Menggunakan Layanan Groq AI...")
-	return callGroqAPI(prompt, config.AppConfig.GroqModel, 0.0)
-}
-
-func callGroqAPI(prompt string, model string, temp float32) (string, error) {
-	reqBody := GroqRequest{
-		Model:       model,
-		Messages:    []GroqMessage{{Role: "user", Content: prompt}},
-		Temperature: temp,
-	}
-	jsonBody, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: config.AppConfig.GroqTimeout}
-	if client.Timeout == 0 {
-		client.Timeout = 30 * time.Second
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("koneksi Groq gagal: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("Groq error %d: %s", resp.StatusCode, string(respBytes))
-	}
-
-	var groqResp GroqResponse
-	if err := json.Unmarshal(respBytes, &groqResp); err != nil {
-		return "", err
-	}
-	if len(groqResp.Choices) == 0 {
-		return "", errors.New("Groq tidak merespon")
-	}
-
-	result := groqResp.Choices[0].Message.Content
-	log.Printf("Token Usage: %d input, %d output", groqResp.Usage.PromptTokens, groqResp.Usage.CompletionTokens)
-
-	return result, nil
-}
-
 func buildFinalPrompt(userPrompt, ddl, refData, dict, ragContext, softCache string) string {
 	return fmt.Sprintf(`
-
 Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: %s.
 
 == 1. KAMUS DATA (DDL & STRUKTUR) ==
@@ -534,198 +401,6 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 	}
 	log.Printf("Dynamic Context: %d tabel relevan.", count)
 	return sb.String(), nil
-}
-
-func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
-	go func() {
-		if config.AppConfig == nil {
-			return
-		}
-		log.Println("Menyimpan ke Semantic Cache...")
-		point := qdrantPoint{
-			ID: uuid.NewString(), Vector: promptVector,
-			Payload: map[string]interface{}{"prompt_asli": promptAsli, "sql_query": sqlQuery},
-		}
-		if err := qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point}); err == nil {
-			log.Println("Berhasil update cache.")
-		}
-	}()
-}
-
-func ManualInjectCache(promptAsli string, sqlQuery string) error {
-	vec, err := GenerateEmbedding(promptAsli)
-	if err != nil {
-		return err
-	}
-	point := qdrantPoint{
-		ID: uuid.NewString(), Vector: vec,
-		Payload: map[string]interface{}{"prompt_asli": promptAsli, "sql_query": sqlQuery},
-	}
-	return qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point})
-}
-
-func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Response, []byte, error) {
-	var reqBody io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		reqBody = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if config.AppConfig != nil && config.AppConfig.QdrantAPIKey != "" {
-		req.Header.Set("api-key", config.AppConfig.QdrantAPIKey)
-	}
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	return resp, respBody, nil
-}
-
-func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSearchReq) (qdrantSearchResp, error) {
-	url := fmt.Sprintf("%s/collections/%s/points/search", baseURL, name)
-	var data qdrantSearchResp
-	resp, body, err := httpDoJSON(ctx, "POST", url, req)
-	if err != nil {
-		return data, err
-	}
-	if resp.StatusCode != 200 {
-		return data, fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
-	}
-	json.Unmarshal(body, &data)
-	return data, nil
-}
-
-func qdrantUpsertPoints(ctx context.Context, baseURL, name string, points []qdrantPoint) error {
-	url := fmt.Sprintf("%s/collections/%s/points?wait=true", baseURL, name)
-	req := map[string]any{"points": points}
-	resp, body, err := httpDoJSON(ctx, "PUT", url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int, distance string) error {
-	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
-	req := map[string]any{"vectors": map[string]any{"size": size, "distance": distance}}
-	resp, body, err := httpDoJSON(ctx, "PUT", url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == 200 {
-		return nil
-	}
-	if (resp.StatusCode == 400 || resp.StatusCode == 409) && strings.Contains(string(body), "already exists") {
-		return nil
-	}
-	return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
-}
-
-func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fieldName, schemaType string) error {
-	url := fmt.Sprintf("%s/collections/%s/index", baseURL, collectionName)
-	req := map[string]string{"field_name": fieldName, "field_schema": schemaType}
-	resp, body, err := httpDoJSON(ctx, "PUT", url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == 200 {
-		return nil
-	}
-	return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
-}
-
-func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
-	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", config.AppConfig.QdrantURL, collectionName)
-	req := map[string]any{"points": []string{pointID}}
-	resp, body, err := httpDoJSON(ctx, "POST", url, req)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
-	}
-	log.Printf("Berhasil hapus Point ID '%s'", pointID)
-	return nil
-}
-
-func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery string) error {
-	vector, err := GenerateEmbedding(prompt)
-	if err != nil {
-		return err
-	}
-	point := qdrantPoint{
-		ID: id, Vector: vector,
-		Payload: map[string]interface{}{"prompt_asli": prompt, "sql_query": sqlQuery},
-	}
-	return qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, collectionName, []qdrantPoint{point})
-}
-
-func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataResponse, error) {
-	scrollResp, err := qdrantClient.Scroll(context.Background(), &pb.ScrollPoints{
-		CollectionName: collectionName, Limit: &limit, WithPayload: pb.NewWithPayload(true),
-	})
-	if err != nil {
-		return nil, err
-	}
-	var results []QdrantDataResponse
-	for _, item := range scrollResp {
-		idStr := item.Id.GetUuid()
-		if idStr == "" {
-			idStr = fmt.Sprintf("%d", item.Id.GetNum())
-		}
-		cleanPayload := make(map[string]interface{})
-		for k, v := range item.Payload {
-			cleanPayload[k] = convertQdrantValue(v)
-		}
-		results = append(results, QdrantDataResponse{ID: idStr, Payload: cleanPayload})
-	}
-	return results, nil
-}
-
-func convertQdrantValue(value *pb.Value) interface{} {
-	switch k := value.Kind.(type) {
-	case *pb.Value_StringValue:
-		return k.StringValue
-	case *pb.Value_IntegerValue:
-		return k.IntegerValue
-	case *pb.Value_DoubleValue:
-		return k.DoubleValue
-	case *pb.Value_BoolValue:
-		return k.BoolValue
-	default:
-		return nil
-	}
-}
-
-func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
-	url := fmt.Sprintf("%s/collections/%s", baseURL, name)
-
-	resp, body, err := httpDoJSON(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
-		log.Printf("Collection '%s' berhasil dihapus (atau belum ada).", name)
-		return nil
-	}
-
-	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
 }
 
 func ClassifyIntent(userInput string) (string, error) {
