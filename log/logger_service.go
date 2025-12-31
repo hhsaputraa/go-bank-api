@@ -23,13 +23,16 @@ var logFile *os.File
 
 func CloseLogger() {
 	if logFile != nil {
-		logFile.Close()
+		err := logFile.Close()
+		if err != nil {
+			log.Printf("Error saat menutup file log: %v", err)
+		}
 	}
 }
 
 func InitLogger() {
 	var err error
-	logFile, err = os.OpenFile("activity.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err = os.OpenFile("activity.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		log.Fatalf("Gagal membuat file log: %v", err)
 	}

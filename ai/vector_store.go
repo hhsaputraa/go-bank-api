@@ -83,7 +83,10 @@ func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSea
 	if resp.StatusCode != 200 {
 		return data, fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
 	}
-	json.Unmarshal(body, &data)
+	if err := json.Unmarshal(body, &data); err != nil {
+		return data, fmt.Errorf("gagal unmarshal response dari qdrant: %w", err)
+	}
+
 	return data, nil
 }
 

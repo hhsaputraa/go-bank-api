@@ -2,9 +2,11 @@ package utils
 
 import (
 	"encoding/json"
+	"fmt"
 	models "go-bank-api/models"
 	"log"
 	"net/http"
+	"regexp"
 )
 
 func SendSuccess(w http.ResponseWriter, data interface{}) {
@@ -48,4 +50,12 @@ func SendError(w http.ResponseWriter, statusCode int, code, message string, deta
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("Error encoding error response: %v", err)
 	}
+}
+
+func ValidateIdentifier(name string) error {
+	validPattern := regexp.MustCompile(`^[A-Z0-9_$#]+$`)
+	if !validPattern.MatchString(name) {
+		return fmt.Errorf("invalid identifier detected: %s", name)
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	database "go-bank-api/database"
 	models "go-bank-api/models"
+	helper "go-bank-api/utils"
 	"log"
 	"net/url"
 	"os"
@@ -124,10 +125,16 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 	schema = strings.Trim(schema, ":")
 	schema = strings.TrimSpace(schema)
 
+	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Printf("SECURITY ALERT: Schema validation failed in GetDynamicReferenceData: %s", schema)
+		return "", err
+	}
+
 	var builder strings.Builder
 	builder.WriteString("== LIVE DATA REFERENSI (Isi Tabel Master Terbaru) ==\n")
 	builder.WriteString("Gunakan ID/Kode di bawah ini secara TEPAT jika user bertanya tentang kategori ini:\n\n")
 
+	const queryTemplate = "SELECT {ID}, {NAME} FROM {SCHEMA}.{TABLE} ORDER BY {ID} ASC"
 	for tableName, nameCol := range targetTables {
 		idCol := "id"
 		switch tableName {
@@ -141,7 +148,10 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 			idCol = "id_tipe_transaksi"
 		}
 
-		query := fmt.Sprintf("SELECT %s, %s FROM %s.%s ORDER BY %s ASC", idCol, nameCol, schema, tableName, idCol)
+		query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
+		query = strings.Replace(query, "{TABLE}", tableName, 1)
+		query = strings.ReplaceAll(query, "{ID}", idCol)
+		query = strings.Replace(query, "{NAME}", nameCol, 1)
 
 		rows, err := database.DbInstance.QueryContext(ctx, query)
 		if err != nil {
@@ -240,14 +250,20 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 		return fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
 	}
 
+	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Printf("SECURITY ALERT: Schema validation failed in AddSqlExample: %s", schema)
+		return err
+	}
+
 	promptExample := fmt.Sprintf("-- Pertanyaan: \"%s\"", promptAsli)
 
-	query := fmt.Sprintf(`
-	INSERT INTO %s.rag_sql_examples
-        (prompt_example, sql_example)
-    VALUES
-        (:1, :2)
-    `, schema)
+	const queryTemplate = `
+	INSERT INTO {SCHEMA}.rag_sql_examples
+		(prompt_example, sql_example)
+	VALUES
+		(:1, :2)
+	`
+	query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -273,10 +289,16 @@ func GetBusinessDictionary(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	query := fmt.Sprintf("SELECT istilah, definisi_bisnis, logika_sql FROM %s.ai_dictionary", schema)
+	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Printf("SECURITY ALERT: Schema validation failed in GetBusinessDictionary: %s", schema)
+		return "", err
+	}
+	const queryTemplate = "SELECT istilah, definisi_bisnis, logika_sql FROM {SCHEMA}.ai_dictionary"
+	query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
 
 	rows, err := database.DbInstance.QueryContext(ctx, query)
 	if err != nil {
+		log.Printf("Warning: Gagal ambil dictionary: %v", err)
 		return "", nil
 	}
 	defer rows.Close()
@@ -314,8 +336,15 @@ func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
 	schema = strings.Trim(schema, ":")
 	schema = strings.TrimSpace(schema)
 
+	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Printf("SECURITY ALERT: Schema name validation failed: %s", schema)
+		return false, err
+	}
+
+	const queryTemplate = "SELECT COUNT (*)FROM {SCHEMA}.absurd_keywords WHERE is_active = 1 AND INSTR(:1, LOWER(keyword)) > 0 AND ROWNUM = 1"
+	query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
+
 	lowerPrompt := strings.ToLower(prompt)
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s.absurd_keywords WHERE is_active = 1 AND INSTR(:1, LOWER(keyword)) > 0 AND ROWNUM = 1", schema)
 
 	var exists int
 
