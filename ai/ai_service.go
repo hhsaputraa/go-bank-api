@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	config "go-bank-api/config"
-	models "go-bank-api/models"
-	utils "go-bank-api/utils"
 	"log"
 	"regexp"
 	"strings"
 	"time"
+
+	config "go-bank-api/config"
+	"go-bank-api/constants"
+	models "go-bank-api/models"
+	utils "go-bank-api/utils"
 
 	"github.com/google/generative-ai-go/genai"
 	pb "github.com/qdrant/go-client/qdrant"
@@ -84,16 +86,16 @@ func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {
 
 	intent, _ := ClassifyIntent(userPrompt)
 
-	if intent == "CHAT" {
+	if intent == constants.IntentChat {
 		return models.AISqlResponse{}, &models.AppError{
-			Code:    "CHIT_CHAT",
+			Code:    constants.ErrCodeChitChat,
 			Message: "Halo! Saya Asisten Data Bank Supra. Silakan tanya seputar Perbankan.",
 		}
 	}
 
-	if intent == "OFF_TOPIC" {
+	if intent == constants.IntentOffTopic {
 		return models.AISqlResponse{}, &models.AppError{
-			Code:    "CHIT_CHAT",
+			Code:    constants.ErrCodeChitChat,
 			Message: "Maaf, saya hanya bisa menjawab pertanyaan seputar Perbankan. Tidak bisa melayani topik lain.",
 		}
 	}
@@ -223,7 +225,7 @@ func checkSemanticCache(ctx context.Context, vector []float32) (*models.AISqlRes
 			return &models.AISqlResponse{SQL: cachedSql, IsCached: true}, "", nil
 		}
 
-		if topScore >= 0.80 {
+		if topScore >= constants.CacheSoftHitThreshold {
 			log.Printf("💡 SOFT CACHE HIT (Skor: %f).", topScore)
 			softContext := fmt.Sprintf("\nCONTOH RIWAYAT SERUPA (Sangat Relevan):\nUser: \"%s\"\nSQL: %s\n", cachedPrompt, cachedSql)
 			return nil, softContext, nil
@@ -244,7 +246,7 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 		Limit:          &searchLimit,
 		Filter: &pb.Filter{
 			Must: []*pb.Condition{{
-				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: "sql"}}}},
+				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: constants.CategorySQL}}}},
 			}},
 		},
 	})
@@ -253,7 +255,7 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
 	}
 
-	if searchResponse[0].Score < 0.45 {
+	if searchResponse[0].Score < constants.RAGMinimumScore {
 		log.Println("Score RAG rendah. Mengabaikan contoh RAG.")
 		return "TIDAK ADA CONTOH SQL YANG RELEVAN."
 	}
@@ -380,7 +382,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 		Limit:          &limit,
 		Filter: &pb.Filter{
 			Must: []*pb.Condition{{
-				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: "ddl"}}}},
+				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: constants.CategoryDDL}}}},
 			}},
 		},
 	})
@@ -391,7 +393,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 	var sb strings.Builder
 	count := 0
 	for _, p := range searchResponse {
-		if p.Score < 0.3 {
+		if p.Score < constants.DDLMinimumScore {
 			continue
 		}
 		if val := p.GetPayload()["content"].GetStringValue(); val != "" {
@@ -424,9 +426,9 @@ Input User: "%s"
 JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 `
 	finalPrompt := fmt.Sprintf(systemPrompt, userInput)
-	rawResponse, err := callGroqAPI(finalPrompt, "llama-3.1-8b-instant", 0.0)
+	rawResponse, err := callGroqAPI(finalPrompt, constants.GroqModelFast, 0.0)
 	if err != nil {
-		return "SQL", nil
+		return constants.IntentSQL, nil
 	}
 	var result IntentResponse
 	cleanJSON := strings.TrimSpace(rawResponse)
@@ -435,7 +437,7 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 
 	if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
 		log.Printf("⚠️ Gagal parse intent JSON: %v. Raw: %s", err, rawResponse)
-		return "SQL", nil
+		return constants.IntentSQL, nil
 	}
 
 	log.Printf("ROUTER DECISION: [%s] untuk input '%s'", result.Category, userInput)

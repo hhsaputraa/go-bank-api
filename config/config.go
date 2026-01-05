@@ -49,8 +49,9 @@ type Config struct {
 	RAGSearchLimit uint64
 
 	// Server
-	ServerPort string
-	ServerHost string
+	ServerPort  string
+	ServerHost  string
+	FrontendURL string
 
 	// Query
 	QueryTimeout time.Duration
@@ -59,11 +60,9 @@ type Config struct {
 	AppEnv string
 	Debug  bool
 
-	//JWT SECRET
+	// Security
 	JWTSecret string
-
-	//AES Key
-	AESKey string
+	AESKey    string
 }
 
 var AppConfig *Config
@@ -110,15 +109,18 @@ func LoadConfig() (*Config, error) {
 		RAGSearchLimit: getEnvAsUint64("RAG_SEARCH_LIMIT", 7),
 
 		// Server
-		ServerPort: getEnv("SERVER_PORT", ""),
-		ServerHost: getEnv("SERVER_HOST", ""),
+		ServerPort:  getEnv("SERVER_PORT", "8080"),
+		ServerHost:  getEnv("SERVER_HOST", "localhost"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		// Query
 		QueryTimeout: time.Duration(getEnvAsInt("QUERY_TIMEOUT_SECONDS", 10)) * time.Second,
 
 		// Environment
-		AppEnv:    getEnv("APP_ENV", ""),
-		Debug:     getEnvAsBool("DEBUG", false),
+		AppEnv: getEnv("APP_ENV", "development"),
+		Debug:  getEnvAsBool("DEBUG", false),
+
+		// Security
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		AESKey:    getEnv("AES_KEY", ""),
 	}

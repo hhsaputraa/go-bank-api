@@ -3,27 +3,22 @@ package controllers
 import (
 	"context"
 	"encoding/json"
-	ai "go-bank-api/ai"
-	logger "go-bank-api/log"
-	models "go-bank-api/models"
-	utils "go-bank-api/utils"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	ai "go-bank-api/ai"
+	"go-bank-api/constants"
+	logger "go-bank-api/log"
+	models "go-bank-api/models"
+	utils "go-bank-api/utils"
 )
 
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	clientIP := r.RemoteAddr
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// CORS is handled by global middleware
 
 	normalizedPrompt, ok := parseAndValidateRequest(w, r)
 	if !ok {
@@ -31,9 +26,9 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		detectedIntent string = "UKNOWN"
+		detectedIntent string = constants.IntentUnknown
 		generatedSQL   string = ""
-		finalStatus    string = "FAILED"
+		finalStatus    string = constants.StatusFailed
 		finalError     error  = nil
 	)
 
@@ -48,11 +43,11 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := utils.ValidateSafePrompt(normalizedPrompt); err != nil {
-		detectedIntent = "ATTACK"
+		detectedIntent = constants.IntentAttack
 		finalStatus = "BLOCKED"
 		finalError = err
 		log.Printf("SECURITY BLOCK: %v", err)
-		utils.SendError(w, http.StatusForbidden, "DANGEROUS_INTENT", err.Error())
+		utils.SendError(w, http.StatusForbidden, constants.ErrCodeDangerousIntent, err.Error())
 		return
 	}
 
@@ -63,19 +58,19 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if aiResp.IsAmbiguous {
-		detectedIntent = "AMBIGUOUS"
-		finalStatus = "SUCCESS"
+		detectedIntent = constants.IntentAmbiguous
+		finalStatus = constants.StatusSuccess
 		utils.SendAmbiguous(w, "Maaf, pertanyaan Anda kurang jelas atau tidak cukup spesifik", aiResp.Suggestions)
 		return
 	}
 
 	if strings.TrimSpace(aiResp.SQL) == "" {
-		finalStatus = "FAILED"
-		utils.SendError(w, http.StatusUnprocessableEntity, "EMPTY_SQL", "AI tidak menghasilkan query SQL yang valid")
+		finalStatus = constants.StatusFailed
+		utils.SendError(w, http.StatusUnprocessableEntity, constants.ErrCodeEmptySQL, "AI tidak menghasilkan query SQL yang valid")
 		return
 	}
 
-	detectedIntent = "SQL"
+	detectedIntent = constants.IntentSQL
 	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
@@ -84,13 +79,13 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		finalStatus = "DB_ERROR"
 		finalError = execErr
 		log.Printf("FATAL: Query Gagal Total | SQL: %s", aiResp.SQL)
-		utils.SendError(w, http.StatusUnprocessableEntity, "QUERY_EXECUTION_FAILED",
+		utils.SendError(w, http.StatusUnprocessableEntity, constants.ErrCodeQueryFailed,
 			"Query tidak dapat dieksekusi. Sistem mencoba memperbaiki otomatis namun gagal.",
 			execErr.Error())
 		return
 	}
 
-	finalStatus = "SUCCESS"
+	finalStatus = constants.StatusSuccess
 	generatedSQL = fixedSQL
 	if !aiResp.IsCached {
 		go ai.SaveToCache(aiResp.PromptAsli, aiResp.Vector, fixedSQL)
@@ -100,28 +95,21 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// CORS is handled by global middleware
 
 	if r.Method != http.MethodPost {
-		utils.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
+		utils.WriteError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
 		return
 	}
 
 	var req models.EnhanceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.WriteError(w, http.StatusBadRequest, "BAD_FORMAT", "Request body JSON tidak valid")
+		utils.WriteError(w, http.StatusBadRequest, constants.ErrCodeBadFormat, "Request body JSON tidak valid")
 		return
 	}
 
 	if strings.TrimSpace(req.DraftPrompt) == "" {
-		utils.WriteError(w, http.StatusBadRequest, "EMPTY_PROMPT", "Prompt tidak boleh kosong")
+		utils.WriteError(w, http.StatusBadRequest, constants.ErrCodeEmptyPrompt, "Prompt tidak boleh kosong")
 		return
 	}
 
@@ -130,7 +118,7 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 	enhancedText, err := ai.EnhanceNaturalLanguage(req.DraftPrompt)
 	if err != nil {
 		log.Printf("Gagal enhance prompt: %v", err)
-		utils.WriteError(w, http.StatusInternalServerError, "ENHANCE_FAILED", "Gagal memperbaiki kalimat")
+		utils.WriteError(w, http.StatusInternalServerError, constants.ErrCodeEnhanceFailed, "Gagal memperbaiki kalimat")
 		return
 	}
 
@@ -143,23 +131,23 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 
 func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if r.Method != http.MethodPost {
-		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Metode HTTP tidak diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
 		return "", false
 	}
 	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.SendError(w, http.StatusBadRequest, "INVALID_JSON", "Format JSON tidak valid")
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidJSON, "Format JSON tidak valid")
 		return "", false
 	}
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
-		utils.SendError(w, http.StatusBadRequest, "EMPTY_PROMPT", "Prompt tidak boleh kosong")
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeEmptyPrompt, "Prompt tidak boleh kosong")
 		return "", false
 	}
 
 	if err := utils.ValidatePromptSanity(normalizedPrompt); err != nil {
-		utils.SendError(w, http.StatusBadRequest, "INVALID_PROMPT", err.Error())
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, err.Error())
 		return "", false
 	}
 
@@ -169,7 +157,7 @@ func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, bo
 func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt string) bool {
 	if isAbsurd, err := ai.IsAbsurdPrompt(ctx, prompt); err != nil {
 		log.Printf("Error cek absurd: %v", err)
-		utils.SendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Layanan sedang bermasalah")
+		utils.SendError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "Layanan sedang bermasalah")
 		return true
 	} else if isAbsurd {
 		utils.SendAmbiguous(w, "Pertanyaan kurang jelas", []string{
@@ -183,26 +171,26 @@ func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt str
 
 func handleAIError(w http.ResponseWriter, err error, intent *string, status *string, finalErr *error) {
 	if appErr, ok := err.(*models.AppError); ok {
-		if appErr.Code == "CHIT_CHAT" {
+		if appErr.Code == constants.ErrCodeChitChat {
 			*intent = "CHAT/OFF_TOPIC"
-			*status = "SUCCESS"
+			*status = constants.StatusSuccess
 			utils.SendError(w, http.StatusBadRequest, "CHAT_RESPONSE", appErr.Message)
 			return
 		}
 		log.Printf("Handled Error: %s - %s", appErr.Code, appErr.Message)
 
 		statusCode := http.StatusInternalServerError
-		if appErr.Code == "DANGEROUS_INTENT" {
+		if appErr.Code == constants.ErrCodeDangerousIntent {
 			statusCode = http.StatusForbidden
 		}
-		*intent = "SQL_ATTEMPT"
+		*intent = constants.IntentSQLAttempt
 		*finalErr = appErr
 		utils.SendError(w, statusCode, appErr.Code, appErr.Message)
 		return
 	}
 
 	log.Printf("AI gagal generate SQL (System Error): %v", err)
-	utils.SendError(w, http.StatusInternalServerError, "AI_GENERATION_FAILED", "Gagal menghasilkan query SQL")
+	utils.SendError(w, http.StatusInternalServerError, constants.ErrCodeAIGenerationFailed, "Gagal menghasilkan query SQL")
 }
 
 func executeWithRetry(aiResp models.AISqlResponse) (ai.QueryResult, string, error) {

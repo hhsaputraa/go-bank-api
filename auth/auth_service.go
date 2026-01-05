@@ -10,6 +10,7 @@ import (
 	"time"
 
 	config "go-bank-api/config"
+	"go-bank-api/constants"
 	database "go-bank-api/database"
 	utils "go-bank-api/utils"
 
@@ -62,14 +63,16 @@ func RegisterUser(req RegisterRequest) error {
 		return err
 	}
 	query := `
-		INSERT INTO app_users (username, password_hash, full_name, email, is_admin, is_active) 
-		VALUES (:1, :2, :3, :4, 0, 1)
+		INSERT INTO app_users (username, password_hash, full_name, email, is_admin, is_active)
+		VALUES (:1, :2, :3, :4, :5, :6)
 	`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = database.DbInstance.ExecContext(ctx, query, req.Username, hashedPwd, req.FullName, req.Email)
+	_, err = database.DbInstance.ExecContext(ctx, query,
+		req.Username, hashedPwd, req.FullName, req.Email,
+		constants.RegularUserRole, constants.ActiveUserStatus)
 	if err != nil {
 		if strings.Contains(err.Error(), "ORA-00001") {
 			return errors.New("username sudah digunakan")
@@ -119,7 +122,7 @@ func LoginUser(req LoginRequest) (string, error) {
 		return "", errors.New("username atau password salah")
 	}
 
-	if isActive == 0 {
+	if isActive == constants.InactiveUserStatus {
 		return "", errors.New("akun dinonaktifkan")
 	}
 
@@ -127,7 +130,7 @@ func LoginUser(req LoginRequest) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":  user.ID,
 		"username": user.Username,
-		"is_admin": isAdmin == 7,
+		"is_admin": isAdmin == constants.AdminRoleValue,
 		"exp":      expTime.Unix(),
 	})
 
@@ -162,21 +165,10 @@ func LoginUser(req LoginRequest) (string, error) {
 	return tokenString, nil
 }
 
-// auth_service.go
-
+// AuthMiddleware validates JWT tokens and checks session validity
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		frontendURL := "http://localhost:3084"
-
-		w.Header().Set("Access-Control-Allow-Origin", frontendURL)
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == http.MethodOptions {
-			next(w, r)
-			return
-		}
+		// CORS is handled by global CORS middleware, not here
 
 		var tokenString string
 		cookie, err := r.Cookie("auth_token")
@@ -231,11 +223,11 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 
 			if exists == 0 {
-				utils.SendError(w, http.StatusUnauthorized, "SESSION_EXPIRED", "Sesi berakhir")
+				utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeSessionExpired, "Sesi berakhir")
 				return
 			}
 		}
-		ctx := context.WithValue(r.Context(), "user_id", claims["user_id"])
+		ctx := context.WithValue(r.Context(), constants.ContextKeyUserID, claims["user_id"])
 		next(w, r.WithContext(ctx))
 	}
 }

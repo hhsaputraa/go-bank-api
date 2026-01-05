@@ -33,7 +33,7 @@ GROQ_TIMEOUT_SECONDS=30
 # AI SERVICE CONFIGURATION (OLLAMA)
 # ============================================
 OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3-vl:235b-cloud
+OLLAMA_MODEL=gemma3:4b
 
 # ============================================
 # GOOGLE AI CONFIGURATION (EMBEDDING)

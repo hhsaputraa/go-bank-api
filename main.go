@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
 	ai "go-bank-api/ai"
 	config "go-bank-api/config"
 	database "go-bank-api/database"
 	logger "go-bank-api/log"
+	"go-bank-api/middleware"
 	routes "go-bank-api/routes"
-	"log"
-	"net/http"
-	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -41,18 +47,49 @@ func main() {
 		log.Fatalf("Fatal Error: Gagal koneksi ke Qdrant (Database Vektor): %v", err)
 	}
 
+	// Create a new ServeMux for better control
+	mux := http.NewServeMux()
+
 	// Register HTTP routes
 	log.Println("Aplikasi siap berjalan...")
-	routes.RegisterRoutes()
+	routes.RegisterRoutes(mux)
 
+	// Apply middleware chain
+	handler := middleware.LoggingMiddleware(
+		middleware.CORSMiddleware(mux),
+	)
+
+	// Create server with proper configuration
 	srv := &http.Server{
-		Addr:              ":" + config.AppConfig.ServerPort,
-		Handler:           nil,
+		Addr:              config.AppConfig.ServerHost + ":" + config.AppConfig.ServerPort,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Fatal(srv.ListenAndServe())
 
+	// Start server in a goroutine
+	go func() {
+		log.Printf("🚀 Server berjalan di http://%s:%s", config.AppConfig.ServerHost, config.AppConfig.ServerPort)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Fatal Error: Server gagal start: %v", err)
+		}
+	}()
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("🛑 Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("✅ Server exited gracefully")
 }

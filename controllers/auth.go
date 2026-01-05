@@ -3,28 +3,23 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
-	auth "go-bank-api/auth"
-	config "go-bank-api/config"
-	database "go-bank-api/database"
-	utils "go-bank-api/utils"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	auth "go-bank-api/auth"
+	config "go-bank-api/config"
+	"go-bank-api/constants"
+	database "go-bank-api/database"
+	utils "go-bank-api/utils"
 )
 
 func HandleRegister(w http.ResponseWriter, r *http.Request) {
-	// CORS setup standar
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// CORS is handled by global middleware
 
 	if r.Method != http.MethodPost {
-		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Hanya POST yang diizinkan")
 		return
 	}
 
@@ -48,17 +43,10 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3084")
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// CORS is handled by global middleware
 
 	if r.Method != http.MethodPost {
-		utils.SendError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Hanya POST yang diizinkan")
 		return
 	}
 
@@ -71,7 +59,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	plainUsername, err := utils.DecryptField(req.Username)
 	if err != nil {
 		fmt.Printf("[Security] Gagal dekripsi username: %v\n", err)
-		utils.SendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Username)")
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal membaca data rahasia (Username)")
 		return
 	}
 	req.Username = plainUsername
@@ -79,7 +67,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	plainPassword, err := utils.DecryptField(req.Password)
 	if err != nil {
 		fmt.Printf("[Security] Gagal dekripsi password: %v\n", err)
-		utils.SendError(w, http.StatusBadRequest, "DECRYPT_FAIL", "Gagal membaca data rahasia (Password)")
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal membaca data rahasia (Password)")
 		return
 	}
 	req.Password = plainPassword
@@ -88,7 +76,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := auth.LoginUser(req)
 	if err != nil {
-		utils.SendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
+		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeLoginFailed, err.Error())
 		return
 	}
 	isProduction := config.AppConfig.AppEnv == "priduction"
@@ -110,7 +98,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
 
-	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3084")
+	w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -164,28 +152,17 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleMe(w http.ResponseWriter, r *http.Request) {
-	frontendURL := "http://localhost:3084"
-
-	w.Header().Set("Access-Control-Allow-Origin", frontendURL)
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	// Handle Preflight Request (Browser bertanya: "Boleh gak saya kirim cookie?")
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+	// CORS is handled by global middleware
 
 	if r.Method != http.MethodGet {
-		utils.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya GET yang diizinkan")
+		utils.WriteError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Hanya GET yang diizinkan")
 		return
 	}
 
 	// Ambil UserID dari Context (hasil dari AuthMiddleware)
-	userIDVal := r.Context().Value("user_id")
+	userIDVal := r.Context().Value(constants.ContextKeyUserID)
 	if userIDVal == nil {
-		utils.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Token tidak valid")
+		utils.WriteError(w, http.StatusUnauthorized, constants.ErrCodeUnauthorized, "Token tidak valid")
 		return
 	}
 
