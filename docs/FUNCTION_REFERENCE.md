@@ -1,24 +1,43 @@
 # Function Reference - Go Bank API
 
+> **📝 Last Updated**: 2026-01-05 (After Major Refactoring)
+> **Version**: 2.0
+
 Dokumentasi lengkap semua fungsi dalam sistem, dikelompokkan berdasarkan file/module.
 
 ---
 
 ## 📋 Daftar Isi
 
+### Core Modules
 1. [config.go - Configuration Management](#configgo---configuration-management)
-2. [database.go - Database Connection](#databasego---database-connection)
-3. [main.go - Application Entry Point](#maingo---application-entry-point)
-4. [routes.go - HTTP Routing](#routesgo---http-routing)
-5. [handlers.go - HTTP Handlers](#handlersgo---http-handlers)
-6. [logic.go - Business Logic](#logicgo---business-logic)
-7. [ai_service.go - AI & Vector Services](#ai_servicego---ai--vector-services)
-8. [schema_service.go - Schema Management](#schema_servicego---schema-management)
-9. [train.go - Training Module](#traingo---training-module)
+2. [constants.go - Constants & Magic Numbers](#constantsgo---constants--magic-numbers) ✨ NEW
+3. [database.go - Database Connection](#databasego---database-connection)
+4. [main.go - Application Entry Point](#maingo---application-entry-point)
+
+### Middleware (NEW)
+5. [middleware/cors.go - CORS Handling](#middlewarecorsgo---cors-handling) ✨ NEW
+6. [middleware/logging.go - HTTP Logging](#middlewarelogginggo---http-logging) ✨ NEW
+7. [middleware/ratelimit.go - Rate Limiting](#middlewareratelimitgo---rate-limiting) ✨ NEW
+
+### HTTP Layer
+8. [routes.go - HTTP Routing](#routesgo---http-routing)
+9. [controllers/*.go - HTTP Handlers](#controllersgo---http-handlers)
+
+### Business Logic
+10. [ai/logic.go - Business Logic](#ailogicgo---business-logic)
+11. [ai/ai_service.go - AI & Vector Services](#aiai_servicego---ai--vector-services)
+12. [ai/schema_service.go - Schema Management](#aischema_servicego---schema-management)
+13. [ai/train.go - Training Module](#aitraingo---training-module)
+
+### Authentication
+14. [auth/auth_service.go - Authentication](#authauth_servicego---authentication) ✨ NEW
 
 ---
 
 ## config.go - Configuration Management
+
+> **Location**: `config/config.go`
 
 ### `LoadConfig() (*Config, error)`
 
@@ -134,16 +153,90 @@ debug := getEnvAsBool("DEBUG", false)
 
 ---
 
+## constants.go - Constants & Magic Numbers ✨ NEW
+
+> **Location**: `constants/constants.go`
+
+### Overview
+
+File ini berisi semua konstanta aplikasi untuk menghindari magic numbers dan hardcoded strings.
+
+### Error Codes
+
+```go
+const (
+    ErrCodeMethodNotAllowed  = "METHOD_NOT_ALLOWED"
+    ErrCodeInvalidJSON       = "INVALID_JSON"
+    ErrCodeEmptyPrompt       = "EMPTY_PROMPT"
+    ErrCodeDangerousIntent   = "DANGEROUS_INTENT"
+    ErrCodeChitChat          = "CHIT_CHAT"
+    ErrCodeUnauthorized      = "UNAUTHORIZED"
+    // ... dan lainnya
+)
+```
+
+### Intent Types
+
+```go
+const (
+    IntentUnknown    = "UNKNOWN"
+    IntentSQL        = "SQL"
+    IntentChat       = "CHAT"
+    IntentOffTopic   = "OFF_TOPIC"
+    IntentAmbiguous  = "AMBIGUOUS"
+    IntentAttack     = "ATTACK"
+)
+```
+
+### Cache & RAG Thresholds
+
+```go
+const (
+    CacheHardHitThreshold = 0.99  // Direct cache hit
+    CacheSoftHitThreshold = 0.80  // Use as context
+    RAGMinimumScore       = 0.45  // Minimum RAG relevance
+    DDLMinimumScore       = 0.30  // Minimum DDL relevance
+)
+```
+
+### User Roles
+
+```go
+const (
+    AdminRoleValue     = 7  // Database value for admin
+    RegularUserRole    = 0  // Database value for regular user
+    ActiveUserStatus   = 1
+    InactiveUserStatus = 0
+)
+```
+
+**Penggunaan**:
+```go
+// Before (BAD - magic number)
+if isAdmin == 7 {
+    // ...
+}
+
+// After (GOOD - using constant)
+if isAdmin == constants.AdminRoleValue {
+    // ...
+}
+```
+
+---
+
 ## database.go - Database Connection
+
+> **Location**: `database/database.go`
 
 ### `ConnectDB() error`
 
-**Tujuan**: Membuat koneksi ke PostgreSQL database dengan connection pooling
+**Tujuan**: Membuat koneksi ke Oracle 10g+ database dengan connection pooling
 
 **Flow**:
 
 1. Validasi bahwa `AppConfig` sudah dimuat
-2. Open database connection menggunakan `pgx` driver
+2. Open database connection menggunakan `go-ora` driver
 3. Set connection pool settings dari config:
    - `MaxOpenConns`: Maximum open connections
    - `MaxIdleConns`: Maximum idle connections
@@ -156,7 +249,6 @@ debug := getEnvAsBool("DEBUG", false)
 **Dipanggil oleh**:
 
 - `main()` saat aplikasi startup
-- `mainTrain()` saat retraining
 
 **Side Effects**:
 
@@ -175,59 +267,245 @@ debug := getEnvAsBool("DEBUG", false)
 
 ## main.go - Application Entry Point
 
-### `main()`
+> **Location**: `main.go`
 
-**Tujuan**: Entry point aplikasi, orchestrate startup sequence
+### `main()` - Updated v2.0 ✨
 
-**Flow**:
+**Tujuan**: Entry point aplikasi dengan graceful shutdown support
+
+**Flow (Updated)**:
 
 1. Load `.env` file menggunakan `godotenv.Load()`
 2. Load configuration dengan `LoadConfig()`
 3. Connect ke database dengan `ConnectDB()`
-4. Initialize vector service dengan `InitVectorService()`
-5. Register HTTP routes dengan `RegisterRoutes()`
-6. Start HTTP server pada configured port
+4. Initialize logger dengan `InitLogger()`
+5. Initialize vector service dengan `InitVectorService()`
+6. **NEW**: Create dedicated `http.ServeMux`
+7. **NEW**: Register routes dengan `RegisterRoutes(mux)`
+8. **NEW**: Apply middleware chain (Logging → CORS)
+9. **NEW**: Create HTTP server dengan proper timeouts
+10. **NEW**: Start server di goroutine (non-blocking)
+11. **NEW**: Setup graceful shutdown dengan signal handling
 
 **Exit Conditions**:
 
 - Fatal error jika config loading gagal
 - Fatal error jika database connection gagal
 - Fatal error jika vector service initialization gagal
-- Fatal error jika HTTP server gagal start
+- **NEW**: Graceful shutdown pada SIGINT/SIGTERM (Ctrl+C)
 
 **Log Output**:
 
 ```
 "Berhasil memuat file .env"
 "✅ Konfigurasi berhasil dimuat dari environment variables"
-"✅ Berhasil terkoneksi ke database PostgreSQL!"
+"✅ Berhasil terkoneksi ke database ORACLE 10G!"
 "✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant)."
 "Aplikasi siap berjalan..."
-"Server web berjalan di http://localhost:8080"
+"🚀 Server berjalan di http://localhost:8097"
+[HTTP] GET /health | Status: 200 | Duration: 1.234ms | IP: 127.0.0.1 | UA: curl/7.68.0
+"🛑 Shutting down server..."
+"✅ Server exited gracefully"
+```
+
+**Graceful Shutdown**:
+- Listen untuk SIGINT (Ctrl+C) dan SIGTERM
+- Shutdown dengan timeout 30 detik
+- Wait untuk in-flight requests selesai
+- Clean resource cleanup
+
+---
+
+## middleware/cors.go - CORS Handling ✨ NEW
+
+> **Location**: `middleware/cors.go`
+
+### `CORSMiddleware(next http.Handler) http.Handler`
+
+**Tujuan**: Centralized CORS handling untuk semua HTTP requests
+
+**Features**:
+- Multi-origin support (comma-separated di config)
+- Automatic origin validation
+- Credentials support
+- Preflight request handling (OPTIONS)
+
+**Flow**:
+1. Extract `Origin` header dari request
+2. Get allowed origins dari config (`FRONTEND_URL`)
+3. Validate apakah origin diizinkan
+4. Set CORS headers jika valid
+5. Handle preflight (OPTIONS) atau forward ke next handler
+
+**CORS Headers**:
+```
+Access-Control-Allow-Origin: <origin>
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With
+Access-Control-Max-Age: 3600
+```
+
+**Contoh Config**:
+```bash
+# Single origin
+FRONTEND_URL=http://localhost:5173
+
+# Multiple origins
+FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
+```
+
+---
+
+### `getAllowedOrigins() []string`
+
+**Tujuan**: Parse allowed origins dari config
+
+**Return**: Array of allowed origin URLs
+
+**Logic**:
+- Split `FrontendURL` by comma
+- Trim whitespace dari setiap origin
+- Return default `["http://localhost:5173"]` jika config kosong
+
+---
+
+### `isOriginAllowed(origin string, allowedOrigins []string) bool`
+
+**Tujuan**: Validate apakah origin diizinkan
+
+**Parameters**:
+- `origin`: Origin dari request header
+- `allowedOrigins`: List of allowed origins
+
+**Return**: `true` jika origin valid, `false` jika tidak
+
+---
+
+## middleware/logging.go - HTTP Logging ✨ NEW
+
+> **Location**: `middleware/logging.go`
+
+### `LoggingMiddleware(next http.Handler) http.Handler`
+
+**Tujuan**: Log semua HTTP requests dengan timing information
+
+**Log Format**:
+```
+[HTTP] <METHOD> <PATH> | Status: <CODE> | Duration: <TIME> | IP: <IP> | UA: <USER_AGENT>
+```
+
+**Contoh Output**:
+```
+[HTTP] POST /api/query | Status: 200 | Duration: 1.234s | IP: 127.0.0.1 | UA: curl/7.68.0
+[HTTP] GET /health | Status: 200 | Duration: 1.234ms | IP: ::1 | UA: Mozilla/5.0
+[HTTP] POST /api/auth/login | Status: 401 | Duration: 234ms | IP: 192.168.1.100 | UA: axios/1.0
+```
+
+**Tracked Metrics**:
+- HTTP Method
+- Request Path
+- Response Status Code
+- Request Duration
+- Client IP Address
+- User-Agent
+
+---
+
+## middleware/ratelimit.go - Rate Limiting ✨ NEW
+
+> **Location**: `middleware/ratelimit.go`
+
+### `NewRateLimiter(rate int, window time.Duration) *RateLimiter`
+
+**Tujuan**: Create rate limiter dengan token bucket algorithm
+
+**Parameters**:
+- `rate`: Number of requests allowed per window
+- `window`: Time window duration
+
+**Return**: `*RateLimiter` instance
+
+**Features**:
+- Per-IP tracking
+- Token bucket algorithm
+- Automatic cleanup (prevent memory leak)
+
+---
+
+### `RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http.Handler`
+
+**Tujuan**: Create middleware untuk rate limiting
+
+**Parameters**:
+- `rate`: Requests per window (e.g., 10)
+- `window`: Time window (e.g., 1 minute)
+
+**Response saat limit exceeded**:
+```json
+{
+  "error": "RATE_LIMIT_EXCEEDED",
+  "message": "Terlalu banyak permintaan. Silakan coba lagi nanti."
+}
+```
+
+**Contoh Penggunaan**:
+```go
+// Limit admin endpoint to 10 requests per minute
+rateLimitedAdmin := middleware.RateLimitMiddleware(10, 1*time.Minute)
+mux.Handle("/admin/retrain", rateLimitedAdmin(http.HandlerFunc(HandleAdminRetrain)))
 ```
 
 ---
 
 ## routes.go - HTTP Routing
 
-### `RegisterRoutes()`
+> **Location**: `routes/routes.go`
+
+### `RegisterRoutes(mux *http.ServeMux)` - Updated v2.0 ✨
 
 **Tujuan**: Mendaftarkan semua HTTP endpoints ke router
 
+**Parameters**:
+- `mux`: HTTP ServeMux instance (tidak lagi menggunakan DefaultServeMux)
+
 **Endpoints yang didaftarkan**:
 
+**Public Routes**:
 - `GET /health` → `HandleHealthCheck`
-- `POST /api/query` → `HandleDynamicQuery`
+- `POST /api/auth/register` → `HandleRegister`
+- `POST /api/auth/login` → `HandleLogin`
+
+**Protected Routes** (dengan AuthMiddleware):
+- `POST /api/auth/logout` → `HandleLogout`
+- `GET /api/auth/me` → `HandleMe`
 - `POST /api/feedback/koreksi` → `HandleFeedbackKoreksi`
-- `POST /admin/retrain` → `HandleAdminRetrain`
+
+**Query Routes**:
+- `POST /api/query` → `HandleDynamicQuery`
+- `POST /api/enhance` → `HandleEnhancePrompt`
+
+**Admin Routes** (dengan RateLimitMiddleware):
+- `POST /admin/retrain` → `HandleAdminRetrain` (10 req/min)
+- `GET /admin/qdrant/list` → `HandleAdminListQdrant`
+- `DELETE /admin/qdrant/delete` → `HandleAdminDeleteQdrant`
+- `POST /admin/cache/create` → `HandleAdminCacheCreate`
+- `PUT /admin/qdrant/update` → `HandleAdminQdrantUpdate`
 
 **Dipanggil oleh**: `main()` saat startup
 
-**Side Effects**: Register handlers ke `http.DefaultServeMux`
+**Side Effects**: Register handlers ke provided ServeMux
+
+**Changes from v1.0**:
+- Sekarang menerima `*http.ServeMux` parameter
+- Rate limiting applied to admin endpoints
+- CORS tidak lagi di-handle per-route (sekarang di middleware)
 
 ---
 
-## handlers.go - HTTP Handlers
+## controllers/*.go - HTTP Handlers
+
+> **Location**: `controllers/auth.go`, `controllers/query.go`, `controllers/admin.go`, `controllers/feedback.go`
 
 ### `respondWithJSON(w http.ResponseWriter, code int, payload interface{})`
 

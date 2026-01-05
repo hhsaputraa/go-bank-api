@@ -1,17 +1,30 @@
 # Arsitektur Sistem Go Bank API
 
+> **📝 Last Updated**: 2026-01-05 (After Major Refactoring)
+> **Version**: 2.0 (Refactored with Middleware Pattern)
+
 ## 📋 Daftar Isi
 
 1. [Gambaran Umum](#gambaran-umum)
 2. [Komponen Utama](#komponen-utama)
-3. [Flow Diagram](#flow-diagram)
-4. [Teknologi Stack](#teknologi-stack)
+3. [Middleware Layer](#middleware-layer)
+4. [Flow Diagram](#flow-diagram)
+5. [Teknologi Stack](#teknologi-stack)
+6. [Security & Best Practices](#security--best-practices)
 
 ---
 
 ## Gambaran Umum
 
 **Go Bank API** adalah sistem backend yang menggunakan **Natural Language Processing (NLP)** untuk mengkonversi pertanyaan dalam bahasa natural menjadi SQL query. Sistem ini menggunakan pendekatan **RAG (Retrieval-Augmented Generation)** dengan **Semantic Caching** untuk meningkatkan akurasi dan performa.
+
+### ✨ Fitur Baru (v2.0 - Refactored)
+
+- **Middleware Pattern**: CORS, Logging, Rate Limiting
+- **Graceful Shutdown**: Clean exit dengan signal handling
+- **Constants Management**: Semua magic numbers di satu tempat
+- **Multi-Origin CORS**: Support multiple frontend URLs
+- **Rate Limiting**: Protection untuk admin endpoints
 
 ### Konsep Utama
 
@@ -36,56 +49,124 @@
 
 ## Komponen Utama
 
-### 1. **Configuration Layer** (`config.go`)
+### 1. **Configuration Layer** (`config/config.go`)
 
 - Mengelola semua konfigurasi aplikasi dari environment variables
 - Menyediakan helper functions untuk type conversion
 - Validasi required fields (DB_CONN_STRING, API Keys)
+- **NEW**: Support `FrontendURL` untuk CORS configuration
 
-### 2. **Database Layer** (`database.go`)
+### 2. **Constants Layer** (`constants/constants.go`) ✨ NEW
 
-- Koneksi ke PostgreSQL menggunakan driver `pgx`
+- **Error Codes**: Semua error codes (ErrCodeMethodNotAllowed, dll)
+- **Intent Types**: IntentSQL, IntentChat, IntentOffTopic, dll
+- **Cache Thresholds**: CacheHardHitThreshold (0.99), CacheSoftHitThreshold (0.80)
+- **RAG Thresholds**: RAGMinimumScore (0.45), DDLMinimumScore (0.30)
+- **User Roles**: AdminRoleValue (7), RegularUserRole (0)
+- **Context Keys**: ContextKeyUserID, ContextKeyUsername, dll
+
+### 3. **Middleware Layer** (`middleware/`) ✨ NEW
+
+- **`cors.go`**: Centralized CORS handling dengan multi-origin support
+- **`logging.go`**: HTTP request logging (method, path, status, duration, IP)
+- **`ratelimit.go`**: Token bucket rate limiter untuk protection
+
+### 4. **Database Layer** (`database/database.go`)
+
+- Koneksi ke Oracle 10g+ menggunakan driver `go-ora`
 - Connection pooling dengan konfigurasi dinamis
 - Health check dengan timeout
 
-### 3. **HTTP Layer**
+### 5. **HTTP Layer**
 
-- **`routes.go`**: Routing HTTP endpoints
-- **`handlers.go`**: Handler functions untuk setiap endpoint
-- **`models.go`**: Data structures untuk request/response
+- **`routes/routes.go`**: Routing HTTP endpoints dengan mux parameter
+- **`controllers/*.go`**: Handler functions untuk setiap endpoint
+- **`models/models.go`**: Data structures untuk request/response
 
-### 4. **Business Logic Layer** (`logic.go`)
+### 6. **Business Logic Layer** (`ai/logic.go`)
 
 - `GetSQL()`: Orchestrator untuk mendapatkan SQL dari AI
 - `ExecuteDynamicQuery()`: Eksekusi SQL query dengan timeout
-- `BuildDynamicQuery()`: Query builder (legacy, tidak digunakan untuk NLP)
+- `RepairSQLFromAI()`: Self-correction untuk SQL yang error
 
-### 5. **AI Service Layer** (`ai_service.go`)
+### 7. **AI Service Layer** (`ai/ai_service.go`)
 
 - **Vector Service Initialization**: Setup Qdrant + Google AI
 - **Semantic Cache**: Search & save cache menggunakan vector similarity
 - **RAG Search**: Mencari context relevan dari vector database
 - **LLM Integration**: Call Groq API untuk generate SQL
+- **Intent Classification**: Deteksi CHAT vs SQL vs OFF_TOPIC
 - **Qdrant Operations**: REST API calls untuk vector database
 
-### 6. **Schema Service Layer** (`schema_service.go`)
+### 8. **Schema Service Layer** (`ai/schema_service.go`)
 
-- `GetDynamicSchemaContext()`: Ambil DDL dari `information_schema`
-- `GetDynamicSqlExamples()`: Ambil contoh SQL dari tabel `rag_sql_examples`
+- `GetDynamicSchemaContext()`: Ambil DDL dari database
+- `GetDynamicReferenceData()`: Ambil data referensi (status, tipe, dll)
+- `GetBusinessDictionary()`: Ambil kamus istilah bisnis
 - `AddSqlExample()`: Simpan feedback koreksi SQL
-- `getSchemaFromConnStr()`: Extract schema name dari connection string
 
-### 7. **Training Module** (`train.go`)
+### 9. **Training Module** (`ai/train.go`)
 
 - Proses embedding DDL dan SQL examples
 - Upsert vectors ke Qdrant collection
 - Dipanggil via endpoint `/admin/retrain`
 
+### 10. **Authentication Layer** (`auth/auth_service.go`)
+
+- JWT-based authentication
+- Session management di database
+- Password hashing dengan bcrypt
+- AuthMiddleware untuk protected routes
+
+---
+
+## Middleware Layer
+
+### CORS Middleware (`middleware/cors.go`)
+
+**Fungsi**: Menangani Cross-Origin Resource Sharing
+
+**Fitur**:
+- Multi-origin support (comma-separated di config)
+- Automatic origin validation
+- Credentials support
+- Preflight request handling
+
+**Flow**:
+```
+Request → Check Origin → Validate → Set Headers → Next Handler
+```
+
+### Logging Middleware (`middleware/logging.go`)
+
+**Fungsi**: Log semua HTTP requests
+
+**Log Format**:
+```
+[HTTP] POST /api/query | Status: 200 | Duration: 1.234s | IP: 127.0.0.1 | UA: curl/7.68.0
+```
+
+### Rate Limiting Middleware (`middleware/ratelimit.go`)
+
+**Fungsi**: Limit requests per IP
+
+**Algorithm**: Token Bucket
+- Default: 10 requests per minute untuk admin endpoints
+- Automatic cleanup old visitors (prevent memory leak)
+
+**Response saat limit exceeded**:
+```json
+{
+  "error": "RATE_LIMIT_EXCEEDED",
+  "message": "Terlalu banyak permintaan. Silakan coba lagi nanti."
+}
+```
+
 ---
 
 ## Flow Diagram
 
-### A. Application Startup Flow
+### A. Application Startup Flow (Updated v2.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -96,8 +177,42 @@ main()
   │
   ├─► godotenv.Load()                    // Load .env file
   │
-  ├─► LoadConfig()                       // config.go
+  ├─► LoadConfig()                       // config/config.go
   │     │
+  │     ├─► Validate FrontendURL         // NEW: CORS config
+  │     ├─► Validate JWT_SECRET
+  │     └─► Validate AES_KEY (32 chars)
+  │
+  ├─► ConnectDB()                        // database/database.go
+  │
+  ├─► InitLogger()                       // log/logger.go
+  │
+  ├─► InitVectorService()                // ai/ai_service.go
+  │     ├─► Connect to Qdrant
+  │     ├─► Setup Google AI Embedder
+  │     └─► Create collections if not exist
+  │
+  ├─► Create ServeMux                    // NEW: Dedicated mux
+  │
+  ├─► RegisterRoutes(mux)                // routes/routes.go
+  │     ├─► Public routes
+  │     ├─► Protected routes (with AuthMiddleware)
+  │     └─► Admin routes (with RateLimitMiddleware)
+  │
+  ├─► Apply Middleware Chain             // NEW: Middleware pattern
+  │     ├─► LoggingMiddleware
+  │     └─► CORSMiddleware
+  │
+  ├─► Create HTTP Server
+  │     ├─► Set timeouts (Read, Write, Idle)
+  │     └─► Set handler to middleware chain
+  │
+  ├─► Start Server (goroutine)           // NEW: Non-blocking
+  │
+  └─► Setup Graceful Shutdown            // NEW: Signal handling
+        ├─► Listen for SIGINT/SIGTERM
+        ├─► Shutdown with 30s timeout
+        └─► Clean exit
   │     ├─► Read all environment variables
   │     ├─► Apply default values
   │     ├─► Validate required fields
@@ -287,28 +402,33 @@ HandleAdminRetrain()                     // handlers.go
 
 - **Go 1.24+**: Programming language
 - **net/http**: HTTP server (standard library)
+- **Custom Middleware**: CORS, Logging, Rate Limiting
 
 ### Database
 
-- **PostgreSQL**: Relational database
-- **pgx/v5**: PostgreSQL driver for Go
+- **Oracle 10g+**: Relational database
+- **go-ora/v2**: Oracle driver for Go
 
 ### Vector Database
 
 - **Qdrant**: Vector similarity search
   - gRPC client untuk query (port 6334)
   - REST API untuk management (port 6333)
+  - Cloud support dengan TLS
 
 ### AI Services
 
 - **Google AI (Gemini)**: Text embedding
-
   - Model: `text-embedding-004`
   - Vector size: 768 dimensions
 
 - **Groq**: LLM for SQL generation
-  - Model: `llama-3.1-8b-instant`
+  - Model: `qwen/qwen3-32b` (configurable)
+  - Fallback: `llama-3.1-8b-instant`
   - API: OpenAI-compatible endpoint
+
+- **Ollama** (Optional): Local LLM fallback
+  - Model: `gemma3:4b`
 
 ### Libraries
 
@@ -316,7 +436,9 @@ HandleAdminRetrain()                     // handlers.go
 - `github.com/google/generative-ai-go`: Google AI SDK
 - `github.com/qdrant/go-client`: Qdrant gRPC client
 - `github.com/google/uuid`: UUID generation
-- `github.com/jackc/pgx/v5`: PostgreSQL driver
+- `github.com/sijms/go-ora/v2`: Oracle driver
+- `github.com/golang-jwt/jwt/v5`: JWT authentication
+- `golang.org/x/crypto`: Password hashing (bcrypt)
 
 ---
 
@@ -445,4 +567,72 @@ HandleAdminRetrain()                     // handlers.go
 
 ---
 
-**Dokumentasi ini menjelaskan arsitektur lengkap sistem Go Bank API dengan pendekatan RAG dan Semantic Caching untuk Natural Language to SQL conversion.**
+## Security & Best Practices
+
+### 1. **Environment Variables**
+- ✅ API keys tidak di-commit ke repository
+- ✅ `.env.example` sebagai template
+- ✅ Validation untuk required fields
+
+### 2. **CORS Configuration**
+- ✅ Centralized di middleware
+- ✅ Multi-origin support dari config
+- ✅ Credentials support dengan origin validation
+- ❌ Tidak menggunakan wildcard `*` dengan credentials
+
+### 3. **Rate Limiting**
+- ✅ Token bucket algorithm
+- ✅ Per-IP tracking
+- ✅ Automatic cleanup (prevent memory leak)
+- ✅ Applied to admin endpoints
+
+### 4. **Authentication**
+- ✅ JWT-based dengan expiry
+- ✅ Session tracking di database
+- ✅ Password hashing dengan bcrypt
+- ✅ Token validation di middleware
+
+### 5. **Graceful Shutdown**
+- ✅ Signal handling (SIGINT, SIGTERM)
+- ✅ 30-second timeout untuk in-flight requests
+- ✅ Clean resource cleanup
+
+### 6. **Constants Management**
+- ✅ Semua magic numbers di `constants/constants.go`
+- ✅ Error codes standardized
+- ✅ Thresholds configurable
+
+### 7. **Logging**
+- ✅ Structured HTTP logging
+- ✅ Request duration tracking
+- ✅ IP & User-Agent logging
+
+---
+
+## Migration Notes (v1.0 → v2.0)
+
+### Breaking Changes
+1. **CORS**: Sekarang di-handle oleh middleware, bukan per-handler
+2. **Routes**: `RegisterRoutes()` sekarang menerima `*http.ServeMux` parameter
+3. **Config**: Tambahan field `FrontendURL` (required)
+4. **Shutdown**: Server sekarang graceful shutdown, bukan `log.Fatal()`
+
+### New Features
+1. **Middleware Pattern**: CORS, Logging, Rate Limiting
+2. **Constants**: Semua magic numbers sekarang di constants
+3. **Multi-Origin CORS**: Support multiple frontend URLs
+4. **Rate Limiting**: Protection untuk admin endpoints
+5. **Graceful Shutdown**: Clean exit dengan signal handling
+
+### Migration Steps
+1. Update `.env` dengan `FRONTEND_URL`
+2. Rebuild aplikasi: `go build -o bin/app.exe .`
+3. Test graceful shutdown dengan `Ctrl+C`
+4. Verify CORS dari frontend
+
+---
+
+**Dokumentasi ini menjelaskan arsitektur lengkap sistem Go Bank API v2.0 dengan pendekatan RAG, Semantic Caching, dan Middleware Pattern untuk Natural Language to SQL conversion.**
+
+**Last Updated**: 2026-01-05
+**Version**: 2.0 (Refactored)
