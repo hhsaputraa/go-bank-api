@@ -169,11 +169,11 @@ Input User: "%s"
 Output:`
 	finalPrompt := fmt.Sprintf(systemPrompt, draft)
 	opts := GroqOptions{
-		Temperature: 0.7,
-		TopP:        0.8,
+		Temperature: 0.1,
+		TopP:        1.0,
 	}
 
-	return callGroqAPI(finalPrompt, "qwen/qwen3-32b", opts)
+	return callGroqAPI(finalPrompt, "llama-3.1-8b-instant", opts)
 }
 
 func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
