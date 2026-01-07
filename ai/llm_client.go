@@ -22,9 +22,11 @@ type GroqMessage struct {
 }
 
 type GroqRequest struct {
-	Model       string        `json:"model"`
-	Messages    []GroqMessage `json:"messages"`
-	Temperature float32       `json:"temperature"`
+	Model           string        `json:"model"`
+	Messages        []GroqMessage `json:"messages"`
+	Temperature     float32       `json:"temperature"`
+	TopP            float32       `json:"top_p,omitempty"`
+	ReasoningFormat string        `json:"reasoning_format,omitempty"`
 }
 
 type GroqResponse struct {
@@ -36,6 +38,12 @@ type GroqResponse struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+type GroqOptions struct {
+	Temperature     float32
+	TopP            float32
+	ReasoningFormat string
 }
 
 func GenerateEmbedding(text string) ([]float32, error) {
@@ -68,15 +76,34 @@ func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
 	}
 
 	log.Println("Menggunakan Layanan Groq AI...")
-	return callGroqAPI(prompt, config.AppConfig.GroqModel, 0.0)
+	opts := GroqOptions{
+		Temperature:     0.6,
+		TopP:            0.95,
+		ReasoningFormat: "hidden",
+	}
+	return callGroqAPI(prompt, config.AppConfig.GroqModel, opts)
 }
 
-func callGroqAPI(prompt string, model string, temp float32) (string, error) {
+func callGroqAPI(prompt string, model string, options GroqOptions) (string, error) {
 	reqBody := GroqRequest{
-		Model:       model,
-		Messages:    []GroqMessage{{Role: "user", Content: prompt}},
-		Temperature: temp,
+		Model:           model,
+		Messages:        []GroqMessage{{Role: "user", Content: prompt}},
+		Temperature:     options.Temperature,
+		TopP:            options.TopP,
+		ReasoningFormat: options.ReasoningFormat,
 	}
+
+	log.Println("\n========== 📤 OUTGOING PROMPT (Human Readable) ==========")
+	log.Printf("CONFIG: Model=%s | Temp=%.1f | TopP=%.2f\n", model, options.Temperature, options.TopP)
+
+	for _, msg := range reqBody.Messages {
+		log.Printf("--- ROLE: %s ---\n", strings.ToUpper(msg.Role))
+
+		cleanContent := msg.Content
+
+		fmt.Println(cleanContent)
+	}
+	log.Println("========================================================\n")
 	jsonBody, _ := json.Marshal(reqBody)
 
 	req, err := http.NewRequest("POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))

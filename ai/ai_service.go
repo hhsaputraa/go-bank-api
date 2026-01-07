@@ -168,8 +168,12 @@ Output: Tampilkan nasabah yang memiliki saldo tabungan sebesar 20 juta rupiah at
 Input User: "%s"
 Output:`
 	finalPrompt := fmt.Sprintf(systemPrompt, draft)
+	opts := GroqOptions{
+		Temperature: 0.7,
+		TopP:        0.8,
+	}
 
-	return callGroqAPI(finalPrompt, "llama-3.1-8b-instant", 0.1)
+	return callGroqAPI(finalPrompt, "qwen/qwen3-32b", opts)
 }
 
 func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
@@ -189,7 +193,12 @@ ATURAN:
 2. Langsung berikan SQL yang diperbaiki dalam blok markdown code.
 `, promptAsli, sqlSalah, pesanError)
 
-	rawContent, err := callGroqAPI(systemPrompt, config.AppConfig.GroqModel, 0.1)
+	opts := GroqOptions{
+		Temperature:     0.6,
+		TopP:            0.95,
+		ReasoningFormat: "hidden",
+	}
+	rawContent, err := callGroqAPI(systemPrompt, config.AppConfig.GroqModel, opts)
 	if err != nil {
 		return "", err
 	}
@@ -238,7 +247,7 @@ func checkSemanticCache(ctx context.Context, vector []float32) (*models.AISqlRes
 }
 
 func getRAGContext(ctx context.Context, vector []float32) string {
-	var searchLimit uint64 = 10
+	var searchLimit uint64 = 5
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(vector...),
@@ -290,7 +299,7 @@ func buildFinalPrompt(userPrompt, ddl, refData, dict, ragContext, softCache stri
 Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: %s.
 
 == 1. KAMUS DATA (DDL & STRUKTUR) ==
-Baca DDL ini dengan teliti. Perhatikan KOMENTAR (-- ...) di setiap kolom untuk memahami artinya.
+Gunakan Schema Database berikut:
 %s
 
 == 2. LIVE DATA REFERENSI (PENTING: JANGAN MENEBAK ID) ==
@@ -426,7 +435,11 @@ Input User: "%s"
 JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 `
 	finalPrompt := fmt.Sprintf(systemPrompt, userInput)
-	rawResponse, err := callGroqAPI(finalPrompt, constants.GroqModelFast, 0.0)
+	opts := GroqOptions{
+		Temperature: 0.1,
+		TopP:        0.5,
+	}
+	rawResponse, err := callGroqAPI(finalPrompt, constants.GroqModelFast, opts)
 	if err != nil {
 		return constants.IntentSQL, nil
 	}
