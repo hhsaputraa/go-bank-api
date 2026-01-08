@@ -69,3 +69,19 @@ func ValidatePromptSanity(prompt string) error {
 	}
 	return nil
 }
+
+func ValidatePassword(password string) error {
+	if len(password) < 6 {
+		return fmt.Errorf("password minimal 6 karakter")
+	}
+	if !regexp.MustCompile(`[A-Z]`).MatchString(password) {
+		return fmt.Errorf("password harus memiliki minimal 1 huruf besar (A-Z)")
+	}
+	if !regexp.MustCompile(`[0-9]`).MatchString(password) {
+		return fmt.Errorf("password harus memiliki minimal 1 angka (0-9)")
+	}
+	if !regexp.MustCompile(`[!@#$]`).MatchString(password) {
+		return fmt.Errorf("password harus memiliki minimal 1 simbol (!@#$)")
+	}
+	return nil
+}

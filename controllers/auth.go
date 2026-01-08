@@ -34,6 +34,11 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := utils.ValidatePassword(req.Password); err != nil {
+		utils.SendError(w, http.StatusBadRequest, "INVALID_PASSWORD", err.Error())
+		return
+	}
+
 	if err := auth.RegisterUser(req); err != nil {
 		utils.SendError(w, http.StatusConflict, "REGISTER_FAILED", err.Error())
 		return
