@@ -1,0 +1,203 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+)
+
+// Config holds all application configuration
+type Config struct {
+	// Database (Oracle)
+	DBConnString      string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
+	DBPingTimeout     time.Duration
+
+	// Groq AI
+	GroqAPIKey  string
+	GroqModel   string
+	GroqAPIURL  string
+	GroqTimeout time.Duration
+
+	// Google AI
+	GoogleAPIKey        string
+	EmbeddingModel      string
+	EmbeddingVectorSize int
+
+	// Ollama (local LLM)
+	OllamaURL   string
+	OllamaModel string
+
+	// Qdrant
+	QdrantGRPCHost        string
+	QdrantGRPCPort        int
+	QdrantURL             string
+	QdrantCollectionName  string
+	QdrantAPIKey          string
+	QdrantCacheCollection string
+	QdrantDistanceMetric  string
+	QdrantTimeout         time.Duration
+
+	// Cache
+	CacheSimilarityThreshold float32
+	CacheSearchLimit         uint64
+
+	// RAG
+	RAGSearchLimit uint64
+
+	// Server
+	ServerPort  string
+	ServerHost  string
+	FrontendURL string
+
+	// Query
+	QueryTimeout time.Duration
+
+	// Environment
+	AppEnv string
+	Debug  bool
+
+	// Security
+	JWTSecret string
+	AESKey    string
+}
+
+var AppConfig *Config
+
+func LoadConfig() (*Config, error) {
+	cfg := &Config{
+		// Database
+		DBConnString:      getEnv("DB_CONN_STRING", ""),
+		DBMaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 10),
+		DBConnMaxLifetime: time.Duration(getEnvAsInt("DB_CONN_MAX_LIFETIME_MINUTES", 5)) * time.Minute,
+		DBPingTimeout:     time.Duration(getEnvAsInt("DB_PING_TIMEOUT_SECONDS", 5)) * time.Second,
+
+		// Groq AI
+		GroqAPIKey:  getEnv("GROQ_API_KEY", ""),
+		GroqModel:   getEnv("GROQ_MODEL", ""),
+		GroqAPIURL:  getEnv("GROQ_API_URL", ""),
+		GroqTimeout: time.Duration(getEnvAsInt("GROQ_TIMEOUT_SECONDS", 30)) * time.Second,
+
+		// Google AI
+		GoogleAPIKey:        getEnv("GOOGLE_API_KEY", ""),
+		EmbeddingModel:      getEnv("EMBEDDING_MODEL", "models/text-embedding-004"),
+		EmbeddingVectorSize: getEnvAsInt("EMBEDDING_VECTOR_SIZE", 768),
+
+		// Ollama (local LLM)
+		OllamaURL:   getEnv("OLLAMA_URL", ""),
+		OllamaModel: getEnv("OLLAMA_MODEL", ""),
+
+		// Qdrant
+		QdrantGRPCHost:        getEnv("QDRANT_GRPC_HOST", ""),
+		QdrantGRPCPort:        getEnvAsInt("QDRANT_GRPC_PORT", 6334),
+		QdrantURL:             getEnv("QDRANT_URL", ""),
+		QdrantAPIKey:          getEnv("QDRANT_API_KEY", ""),
+		QdrantCollectionName:  getEnv("QDRANT_COLLECTION_NAME", ""),
+		QdrantCacheCollection: getEnv("QDRANT_CACHE_COLLECTION", ""),
+		QdrantDistanceMetric:  getEnv("QDRANT_DISTANCE_METRIC", ""),
+		QdrantTimeout:         time.Duration(getEnvAsInt("QDRANT_TIMEOUT_SECONDS", 60)) * time.Second,
+
+		// Cache
+		CacheSimilarityThreshold: getEnvAsFloat32("CACHE_SIMILARITY_THRESHOLD", 0.95),
+		CacheSearchLimit:         getEnvAsUint64("CACHE_SEARCH_LIMIT", 1),
+
+		// RAG
+		RAGSearchLimit: getEnvAsUint64("RAG_SEARCH_LIMIT", 7),
+
+		// Server
+		ServerPort:  getEnv("SERVER_PORT", "8080"),
+		ServerHost:  getEnv("SERVER_HOST", "localhost"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+
+		// Query
+		QueryTimeout: time.Duration(getEnvAsInt("QUERY_TIMEOUT_SECONDS", 10)) * time.Second,
+
+		// Environment
+		AppEnv: getEnv("APP_ENV", "development"),
+		Debug:  getEnvAsBool("DEBUG", false),
+
+		// Security
+		JWTSecret: getEnv("JWT_SECRET", ""),
+		AESKey:    getEnv("AES_KEY", ""),
+	}
+
+	// Validate required fields
+	if cfg.DBConnString == "" {
+		return nil, fmt.Errorf("DB_CONN_STRING is required (Oracle format: username/password@host:port/service_name)")
+	}
+	// At least one LLM endpoint required: Groq (remote) or Ollama (local)
+	if cfg.GroqAPIKey == "" && cfg.OllamaURL == "" {
+		return nil, fmt.Errorf("either GROQ_API_KEY (remote LLM) or OLLAMA_URL (local LLM) is required")
+	}
+	if cfg.GoogleAPIKey == "" {
+		return nil, fmt.Errorf("GOOGLE_API_KEY is required")
+	}
+	if len(cfg.AESKey) != 32 {
+		return nil, fmt.Errorf("AES_KEY harus 32 karakter (saat ini: %d)", len(cfg.AESKey))
+	}
+
+	AppConfig = cfg
+	return cfg, nil
+}
+
+// Helper functions to read environment variables with defaults
+
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsUint64(key string, defaultValue uint64) uint64 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseUint(valueStr, 10, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsFloat32(key string, defaultValue float32) float32 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(valueStr, 32)
+	if err != nil {
+		return defaultValue
+	}
+	return float32(value)
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseBool(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
