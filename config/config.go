@@ -63,6 +63,14 @@ type Config struct {
 	// Security
 	JWTSecret string
 	AESKey    string
+
+	// OpenRouter
+	OpenRouterAPIKey string
+	OpenRouterModel  string
+	OpenRouterURL    string // Allow overriding for tests/proxy
+
+	// LLM Provider Selection
+	LLMProvider string // "groq", "ollama", "openrouter"
 }
 
 var AppConfig *Config
@@ -123,6 +131,12 @@ func LoadConfig() (*Config, error) {
 		// Security
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		AESKey:    getEnv("AES_KEY", ""),
+
+		// OpenRouter
+		OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
+		OpenRouterModel:  getEnv("OPENROUTER_MODEL", "xiaomi/mimo-v2-flash:free"),
+		OpenRouterURL:    getEnv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions"),
+		LLMProvider:      getEnv("LLM_PROVIDER", ""),
 	}
 
 	// Validate required fields
@@ -130,8 +144,8 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("DB_CONN_STRING is required (Oracle format: username/password@host:port/service_name)")
 	}
 	// At least one LLM endpoint required: Groq (remote) or Ollama (local)
-	if cfg.GroqAPIKey == "" && cfg.OllamaURL == "" {
-		return nil, fmt.Errorf("either GROQ_API_KEY (remote LLM) or OLLAMA_URL (local LLM) is required")
+	if cfg.GroqAPIKey == "" && cfg.OllamaURL == "" && cfg.OpenRouterAPIKey == "" {
+		return nil, fmt.Errorf("at least one LLM provider (GROQ, OLLAMA, or OPENROUTER) is required")
 	}
 	if cfg.GoogleAPIKey == "" {
 		return nil, fmt.Errorf("GOOGLE_API_KEY is required")

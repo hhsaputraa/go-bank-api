@@ -43,7 +43,7 @@ func MainTrain() {
 	}
 	defer geminiClient.Close()
 	embedder := geminiClient.EmbeddingModel(config.AppConfig.EmbeddingModel)
-	log.Printf("agar bersih...", config.AppConfig.QdrantCollectionName)
+	log.Printf("Menghapus collection '%s' agar bersih...", config.AppConfig.QdrantCollectionName)
 	if err := qdrantDeleteCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName); err != nil {
 		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)
 	}
