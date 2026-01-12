@@ -101,7 +101,7 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 
 		cleanContent := msg.Content
 
-		fmt.Println(cleanContent)
+		log.Println(cleanContent)
 	}
 	log.Println("========================================================\n")
 	jsonBody, _ := json.Marshal(reqBody)

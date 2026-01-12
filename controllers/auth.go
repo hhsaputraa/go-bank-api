@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -63,7 +62,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	plainUsername, err := utils.DecryptField(req.Username)
 	if err != nil {
-		fmt.Printf("[Security] Gagal dekripsi username: %v\n", err)
+		log.Printf("[Security] Gagal dekripsi username: %v\n", err)
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal membaca data rahasia (Username)")
 		return
 	}
@@ -71,7 +70,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	plainPassword, err := utils.DecryptField(req.Password)
 	if err != nil {
-		fmt.Printf("[Security] Gagal dekripsi password: %v\n", err)
+		log.Printf("[Security] Gagal dekripsi password: %v\n", err)
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal membaca data rahasia (Password)")
 		return
 	}
