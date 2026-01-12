@@ -80,8 +80,8 @@ func ValidatePassword(password string) error {
 	if !regexp.MustCompile(`[0-9]`).MatchString(password) {
 		return fmt.Errorf("password harus memiliki minimal 1 angka (0-9)")
 	}
-	if !regexp.MustCompile(`[!@#$]`).MatchString(password) {
-		return fmt.Errorf("password harus memiliki minimal 1 simbol (!@#$)")
+	if !regexp.MustCompile(`[^A-Za-z0-9]`).MatchString(password) {
+		return fmt.Errorf("password harus memiliki minimal 1 simbol")
 	}
 	return nil
 }

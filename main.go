@@ -71,7 +71,7 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("🚀 Server berjalan di http://%s:%s", config.AppConfig.ServerHost, config.AppConfig.ServerPort)
+		log.Printf("Server berjalan di http://%s:%s", config.AppConfig.ServerHost, config.AppConfig.ServerPort)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Fatal Error: Server gagal start: %v", err)
 		}
