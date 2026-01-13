@@ -18,8 +18,6 @@ import (
 )
 
 func main() {
-	// Initialize Config & Database (Similar to main API)
-	// Suppress standard logs to stderr so they don't interfere with MCP stdio
 	log.SetOutput(os.Stderr)
 
 	if err := godotenv.Load(); err != nil {
@@ -34,21 +32,16 @@ func main() {
 		log.Fatalf("Failed to connect to DB: %v", err)
 	}
 
-	// Initialize Vector Service (crucial for AI Query)
-	// Note: We might want to skip heavy initialization if not needed immediately,
-	// but GetSQLFromAI needs it.
 	if err := ai.InitVectorService(); err != nil {
 		log.Printf("Warning: Vector service init failed: %v. AI features might be limited.", err)
 	}
 
-	// Create MCP Server
 	s := server.NewMCPServer(
 		"Go Bank API MCP",
 		"1.0.0",
 		server.WithLogging(),
 	)
 
-	// Register Tool: query_bank_data
 	tool := mcp.NewTool("query_bank_data",
 		mcp.WithDescription("Ask questions about bank data in natural language. Capable of checking balances, transactions, and customer details. Always use this tool for any data retrieval request."),
 		mcp.WithString("prompt",
@@ -70,10 +63,8 @@ func main() {
 
 		log.Printf("[MCP] Handling Query: %s", prompt)
 
-		// 1. Get SQL from AI
 		aiResp, err := ai.GetSQL(prompt)
 		if err != nil {
-			// Check for known app errors (block, chit-chat)
 			if appErr, ok := err.(*models.AppError); ok {
 				return mcp.NewToolResultText(fmt.Sprintf("Error (%s): %s", appErr.Code, appErr.Message)), nil
 			}
@@ -81,7 +72,6 @@ func main() {
 		}
 
 		if aiResp.IsAmbiguous {
-			// Return suggestions
 			msg := "Pertanyaan ambigu. Mungkin maksud Anda:\n"
 			for _, sugg := range aiResp.Suggestions {
 				msg += fmt.Sprintf("- %s\n", sugg)
@@ -89,16 +79,12 @@ func main() {
 			return mcp.NewToolResultText(msg), nil
 		}
 
-		// 2. Execute SQL
 		log.Printf("[MCP] Executing SQL: %s", aiResp.SQL)
 		data, execErr := ai.ExecuteDynamicQuery(aiResp.SQL, nil)
 		if execErr != nil {
-			// Try self-correction logic? Or just return error for now for simplicity
 			return mcp.NewToolResultError(fmt.Sprintf("Query Execution Failed: %v\nSQL: %s", execErr, aiResp.SQL)), nil
 		}
 
-		// 3. Format Response
-		// Convert the map/struct data to a nice JSON string or table representation
 		jsonBytes, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
 			return mcp.NewToolResultError("Failed to serialize response data"), nil
@@ -109,7 +95,6 @@ func main() {
 		return mcp.NewToolResultText(responseText), nil
 	})
 
-	// Start Server on Stdio
 	log.Println("MCP Server running on Stdio...")
 	if err := server.ServeStdio(s); err != nil {
 		log.Fatalf("Server error: %v", err)

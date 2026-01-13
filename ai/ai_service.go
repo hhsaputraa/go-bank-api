@@ -16,6 +16,7 @@ import (
 	utils "go-bank-api/utils"
 
 	"github.com/google/generative-ai-go/genai"
+	"github.com/google/uuid"
 	pb "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/api/option"
 )
@@ -69,6 +70,49 @@ func InitVectorService() error {
 
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
 	return nil
+}
+
+func LearnFromCorrection(prompt string, validSQL string) {
+	if config.AppConfig == nil || !config.AppConfig.EnableAutoLearning {
+		return
+	}
+
+	go func(p, s string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		log.Printf("AUTO-LEARNING: Mempelajari pola baru untuk: '%s'", p)
+
+		vector, err := GenerateEmbedding(p)
+		if err != nil {
+			log.Printf("Auto-Learning gagal (Embedding): %v", err)
+			return
+		}
+
+		pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(p)).String()
+		point := &pb.PointStruct{
+			Id: &pb.PointId{
+				PointIdOptions: &pb.PointId_Uuid{Uuid: pointID},
+			},
+			Vectors: &pb.Vectors{VectorsOptions: &pb.Vectors_Vector{Vector: &pb.Vector{Data: vector}}},
+			Payload: map[string]*pb.Value{
+				"prompt_asli": {Kind: &pb.Value_StringValue{StringValue: p}},
+				"sql_query":   {Kind: &pb.Value_StringValue{StringValue: s}},
+				"category":    {Kind: &pb.Value_StringValue{StringValue: "constants.CategorySQL"}},
+				"source":      {Kind: &pb.Value_StringValue{StringValue: "auto_learning_v2"}},
+				"created_at":  {Kind: &pb.Value_StringValue{StringValue: time.Now().Format(time.RFC3339)}},
+			},
+		}
+		_, err = qdrantClient.Upsert(ctx, &pb.UpsertPoints{
+			CollectionName: config.AppConfig.QdrantCollectionName,
+			Points:         []*pb.PointStruct{point},
+		})
+
+		if err != nil {
+			log.Printf("Auto-Learning Gagal (Qdrant Upsert): %v", err)
+		} else {
+			log.Printf("AUTO-LEARNING SUKSES: Pola baru tersimpan. ID: %s", pointID)
+		}
+	}(prompt, validSQL)
 }
 
 func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {

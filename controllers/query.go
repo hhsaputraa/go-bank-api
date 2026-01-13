@@ -90,6 +90,10 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	if !aiResp.IsCached {
 		go ai.SaveToCache(aiResp.PromptAsli, aiResp.Vector, fixedSQL)
 	}
+	if strings.TrimSpace(fixedSQL) != strings.TrimSpace(aiResp.SQL) {
+		log.Println("REINFORCEMNT : terdeteksi perbaikan SQL. Menyimpan")
+		go ai.LearnFromCorrection(aiResp.PromptAsli, fixedSQL)
+	}
 
 	utils.SendSuccess(w, data)
 }

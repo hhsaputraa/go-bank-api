@@ -26,6 +26,7 @@ type Config struct {
 	GoogleAPIKey        string
 	EmbeddingModel      string
 	EmbeddingVectorSize int
+	EnableAutoLearning  bool
 
 	// Ollama (local LLM)
 	OllamaURL   string
@@ -86,6 +87,8 @@ func LoadConfig() (*Config, error) {
 		GoogleAPIKey:        getEnv("GOOGLE_API_KEY", ""),
 		EmbeddingModel:      getEnv("EMBEDDING_MODEL", "models/text-embedding-004"),
 		EmbeddingVectorSize: getEnvAsInt("EMBEDDING_VECTOR_SIZE", 768),
+
+		EnableAutoLearning: getEnvAsBool("ENABLE_AUTO_LEARNING", true),
 
 		// Ollama (local LLM)
 		OllamaURL:   getEnv("OLLAMA_URL", ""),
