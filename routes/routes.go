@@ -16,6 +16,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/login", controllers.HandleLogin)
 	mux.HandleFunc("/api/auth/logout", auth.AuthMiddleware(controllers.HandleLogout))
 	mux.HandleFunc("/api/auth/me", auth.AuthMiddleware(controllers.HandleMe))
+	mux.HandleFunc("/api/auth/change-password", auth.AuthMiddleware(controllers.HandleChangePassword))
 
 	// Protected Routes (Harus Login / Pakai Token)
 	mux.HandleFunc("/api/query", controllers.HandleDynamicQuery)

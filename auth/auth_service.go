@@ -19,14 +19,15 @@ import (
 )
 
 type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	FullName     string    `json:"full_name"`
-	Email        string    `json:"email"`
-	IsAdmin      bool      `json:"is_admin"`
-	IsActive     bool      `json:"is_active"`
-	LastLoginAt  time.Time `json:"last_login_at"`
+	ID                 int64     `json:"id"`
+	Username           string    `json:"username"`
+	PasswordHash       string    `json:"-"`
+	FullName           string    `json:"full_name"`
+	Email              string    `json:"email"`
+	IsAdmin            bool      `json:"is_admin"`
+	IsActive           bool      `json:"is_active"`
+	MustChangePassword bool      `json:"must_change_password"`
+	LastLoginAt        time.Time `json:"last_login_at"`
 }
 
 type LoginRequest struct {
@@ -82,48 +83,68 @@ func RegisterUser(req RegisterRequest) error {
 	return nil
 }
 
-func LoginUser(req LoginRequest) (string, error) {
+func LoginUser(req LoginRequest) (string, bool, error) {
 
 	if req.Username == "" {
 		log.Println("[AUTH] Gagal: Username kosong")
-		return "", errors.New("username tidak boleh kosong")
+		return "", false, errors.New("username tidak boleh kosong")
 	}
 
 	if req.Password == "" {
 		log.Println("[AUTH] Gagal: Password kosong")
-		return "", errors.New("password tidak boleh kosong")
+		return "", false, errors.New("password tidak boleh kosong")
 	}
 
 	if database.DbInstance == nil {
-		return "", errors.New("database belum terkoneksi")
+		return "", false, errors.New("database belum terkoneksi")
 	}
 
 	log.Printf("[AUTH] Login: User='%s', IP='%s'", req.Username, req.IPAddress)
 
 	var user User
-	var isAdmin, isActive int
+	var isAdmin, isActive, mustChangePassword int
 
 	query := `
-		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active 
+		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active, must_change_password
 		FROM app_users WHERE username = :1
 	`
 	err := database.DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.FullName,
-		&isAdmin, &isActive,
+		&isAdmin, &isActive, &mustChangePassword,
 	)
 
 	if err != nil {
-		log.Printf("[AUTH] User not found: %v", err)
-		return "", errors.New("username atau password salah")
+		log.Printf("[AUTH] User not found or DB error: %v", err)
+		return "", false, errors.New("username atau password salah")
 	}
+
+	/*
+		// Manual conversion/debug
+		log.Printf("[DEBUG] Raw MustChange: %v (Type: %T)", mustChangePasswordRaw, mustChangePasswordRaw)
+
+		if val, ok := mustChangePasswordRaw.(int64); ok {
+			mustChangePassword = int(val)
+		} else if val, ok := mustChangePasswordRaw.(float64); ok {
+			mustChangePassword = int(val)
+		} else if val, ok := mustChangePasswordRaw.(string); ok {
+			// Handle potential string return (some drivers do this for numbers)
+			fmt.Sscanf(val, "%d", &mustChangePassword)
+		} else {
+			// If nil or unknown, default to 0
+			mustChangePassword = 0
+		}
+
+		log.Printf("[DEBUG] Login: %s, DB IsAdmin: %d, IsActive: %d, MustChange: %d",
+			req.Username, isAdmin, isActive, mustChangePassword)
+	*/
 
 	if !CheckPasswordHash(req.Password, user.PasswordHash) {
 		log.Printf("[AUTH] Wrong password for '%s'", req.Username)
-		return "", errors.New("username atau password salah")
+		return "", false, errors.New("username atau password salah")
 	}
 
 	if isActive == constants.InactiveUserStatus {
-		return "", errors.New("akun dinonaktifkan")
+		return "", false, errors.New("akun dinonaktifkan silahkan hubungi administrator")
 	}
 
 	expTime := time.Now().Add(24 * time.Hour)
@@ -136,7 +157,7 @@ func LoginUser(req LoginRequest) (string, error) {
 
 	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -158,11 +179,60 @@ func LoginUser(req LoginRequest) (string, error) {
 
 	if err != nil {
 		log.Printf("[AUTH] Error Critical: Gagal simpan sesi: %v", err)
-		return "", errors.New("gagal membuat sesi login")
+		return "", false, errors.New("gagal membuat sesi login")
 	}
 
 	log.Printf("[AUTH] Login Success: %s", user.Username)
-	return tokenString, nil
+	return tokenString, (mustChangePassword == constants.TrueValue), nil
+}
+
+func ChangePassword(userID int64, oldPassword, newPassword string) error {
+	if database.DbInstance == nil {
+		return errors.New("database belum terkoneksi")
+	}
+	if oldPassword == "" || newPassword == "" {
+		return errors.New("password lama dan baru wajib diisi")
+	}
+
+	// 1. Ambil password lama dari DB
+	var currentHash string
+	queryGet := "SELECT password_hash FROM app_users WHERE id_app_users = :1"
+	err := database.DbInstance.QueryRowContext(context.Background(), queryGet, userID).Scan(&currentHash)
+	if err != nil {
+		return fmt.Errorf("gagal mengambil data user: %w", err)
+	}
+
+	// 2. Verifikasi password lama
+	if !CheckPasswordHash(oldPassword, currentHash) {
+		return errors.New("password lama salah")
+	}
+
+	// 3. Validasi password baru tidak boleh sama dengan lama
+	if oldPassword == newPassword {
+		return errors.New("password baru tidak boleh sama dengan password lama")
+	}
+
+	// 4. Hash password baru
+	newHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	// 4. Update password & reset flag must_change_password
+	queryUpdate := `
+		UPDATE app_users 
+		SET password_hash = :1, must_change_password = :2, last_login_at = CURRENT_TIMESTAMP 
+		WHERE id_app_users = :3
+	`
+	_, err = database.DbInstance.ExecContext(context.Background(), queryUpdate, newHash, constants.FalseValue, userID)
+	if err != nil {
+		return fmt.Errorf("gagal update password: %w", err)
+	}
+
+	// 5. Invalidate sessions (Optional: Force logout other devices)
+	// _, _ = database.DbInstance.Exec("DELETE FROM user_sessions WHERE id_app_users = :1", userID)
+
+	return nil
 }
 
 // AuthMiddleware validates JWT tokens and checks session validity

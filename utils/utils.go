@@ -50,3 +50,25 @@ func DecryptField(hexString string) (string, error) {
 
 	return string(plaintext), nil
 }
+
+// InterfaceToInt safely converts database result interface{} to int
+func InterfaceToInt(val interface{}) int {
+	if val == nil {
+		return 0
+	}
+	if v, ok := val.(int64); ok {
+		return int(v)
+	}
+	if v, ok := val.(float64); ok {
+		return int(v)
+	}
+	if v, ok := val.(int); ok {
+		return v
+	}
+	if v, ok := val.(string); ok {
+		var i int
+		fmt.Sscanf(v, "%d", &i)
+		return i
+	}
+	return 0
+}

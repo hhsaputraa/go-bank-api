@@ -78,7 +78,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	req.UserAgent = r.UserAgent()
 	req.IPAddress = r.RemoteAddr
 
-	token, err := auth.LoginUser(req)
+	token, mustChangePwd, err := auth.LoginUser(req)
 	if err != nil {
 		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeLoginFailed, err.Error())
 		return
@@ -95,9 +95,65 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	utils.SendSuccess(w, map[string]string{
-		"message": "Login berhasil",
+	utils.SendSuccess(w, map[string]interface{}{
+		"message":              "Login berhasil",
+		"must_change_password": mustChangePwd,
 	})
+}
+
+func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Hanya POST yang diizinkan")
+		return
+	}
+
+	userIDVal := r.Context().Value(constants.ContextKeyUserID)
+	if userIDVal == nil {
+		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeUnauthorized, "Token tidak valid")
+		return
+	}
+	// Safely cast userID
+	var userID int64
+	if v, ok := userIDVal.(float64); ok {
+		userID = int64(v)
+	} else if v, ok := userIDVal.(int64); ok {
+		userID = v
+	} else {
+		utils.SendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "User ID invalid")
+		return
+	}
+
+	var req struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		return
+	}
+
+	plainOld, err := utils.DecryptField(req.OldPassword)
+	if err != nil {
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal decrypt password lama")
+		return
+	}
+	plainNew, err := utils.DecryptField(req.NewPassword)
+	if err != nil {
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeDecryptFail, "Gagal decrypt password baru")
+		return
+	}
+
+	if err := utils.ValidatePassword(plainNew); err != nil {
+		utils.SendError(w, http.StatusBadRequest, "WEAK_PASSWORD", err.Error())
+		return
+	}
+
+	if err := auth.ChangePassword(userID, plainOld, plainNew); err != nil {
+		utils.SendError(w, http.StatusBadRequest, "CHANGE_PASSWORD_FAILED", err.Error())
+		return
+	}
+
+	utils.SendSuccess(w, map[string]string{"message": "Password berhasil diubah. Silakan login kembali."})
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
@@ -183,17 +239,17 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 
 	// Query DB
 	var user auth.User
-	var isAdminInt, isActiveInt int
+	var isAdminInt, isActiveInt, mustChangePasswordInt interface{}
 
 	// Sesuaikan nama kolom dengan tabel Anda
 	query := `
-		SELECT id_app_users, username, full_name, email, is_admin, is_active, last_login_at 
+		SELECT id_app_users, username, full_name, email, is_admin, is_active, last_login_at, must_change_password 
 		FROM app_users 
 		WHERE id_app_users = :1
 	`
 	err := database.DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
 		&user.ID, &user.Username, &user.FullName, &user.Email,
-		&isAdminInt, &isActiveInt, &user.LastLoginAt,
+		&isAdminInt, &isActiveInt, &user.LastLoginAt, &mustChangePasswordInt,
 	)
 
 	if err != nil {
@@ -202,8 +258,9 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user.IsAdmin = (isAdminInt == 7)
-	user.IsActive = (isActiveInt == 1)
+	user.IsAdmin = (utils.InterfaceToInt(isAdminInt) == 7)
+	user.IsActive = (utils.InterfaceToInt(isActiveInt) == 1)
+	user.MustChangePassword = (utils.InterfaceToInt(mustChangePasswordInt) == 1)
 
 	// Response Sukses
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{

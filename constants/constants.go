@@ -9,25 +9,25 @@ const (
 
 // Error Codes
 const (
-	ErrCodeMethodNotAllowed  = "METHOD_NOT_ALLOWED"
-	ErrCodeInvalidJSON       = "INVALID_JSON"
-	ErrCodeEmptyPrompt       = "EMPTY_PROMPT"
-	ErrCodeInvalidPrompt     = "INVALID_PROMPT"
-	ErrCodeDangerousIntent   = "DANGEROUS_INTENT"
-	ErrCodeChitChat          = "CHIT_CHAT"
-	ErrCodeAmbiguous         = "AMBIGUOUS"
-	ErrCodeEmptySQL          = "EMPTY_SQL"
-	ErrCodeQueryFailed       = "QUERY_EXECUTION_FAILED"
+	ErrCodeMethodNotAllowed   = "METHOD_NOT_ALLOWED"
+	ErrCodeInvalidJSON        = "INVALID_JSON"
+	ErrCodeEmptyPrompt        = "EMPTY_PROMPT"
+	ErrCodeInvalidPrompt      = "INVALID_PROMPT"
+	ErrCodeDangerousIntent    = "DANGEROUS_INTENT"
+	ErrCodeChitChat           = "CHIT_CHAT"
+	ErrCodeAmbiguous          = "AMBIGUOUS"
+	ErrCodeEmptySQL           = "EMPTY_SQL"
+	ErrCodeQueryFailed        = "QUERY_EXECUTION_FAILED"
 	ErrCodeAIGenerationFailed = "AI_GENERATION_FAILED"
-	ErrCodeUnauthorized      = "UNAUTHORIZED"
-	ErrCodeInvalidToken      = "INVALID_TOKEN"
-	ErrCodeSessionExpired    = "SESSION_EXPIRED"
-	ErrCodeSessionError      = "SESSION_ERROR"
-	ErrCodeInternalError     = "INTERNAL_ERROR"
-	ErrCodeBadFormat         = "BAD_FORMAT"
-	ErrCodeEnhanceFailed     = "ENHANCE_FAILED"
-	ErrCodeDecryptFail       = "DECRYPT_FAIL"
-	ErrCodeLoginFailed       = "LOGIN_FAILED"
+	ErrCodeUnauthorized       = "UNAUTHORIZED"
+	ErrCodeInvalidToken       = "INVALID_TOKEN"
+	ErrCodeSessionExpired     = "SESSION_EXPIRED"
+	ErrCodeSessionError       = "SESSION_ERROR"
+	ErrCodeInternalError      = "INTERNAL_ERROR"
+	ErrCodeBadFormat          = "BAD_FORMAT"
+	ErrCodeEnhanceFailed      = "ENHANCE_FAILED"
+	ErrCodeDecryptFail        = "DECRYPT_FAIL"
+	ErrCodeLoginFailed        = "LOGIN_FAILED"
 )
 
 // Intent Types
@@ -77,6 +77,10 @@ const (
 
 	// InactiveUserStatus indicates an inactive user account
 	InactiveUserStatus = 0
+
+	// Boolean constants for database (Oracle NUMBER(1))
+	TrueValue  = 1
+	FalseValue = 0
 )
 
 // LLM Models
@@ -102,4 +106,3 @@ const (
 	ContextKeyUsername ContextKey = "username"
 	ContextKeyIsAdmin  ContextKey = "is_admin"
 )
-
