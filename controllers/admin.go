@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	ai "go-bank-api/ai"
+	auth "go-bank-api/auth"
 	config "go-bank-api/config"
 	utils "go-bank-api/utils"
 	"log"
@@ -212,4 +213,43 @@ func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding response: %v", err)
 	}
+}
+
+func HandleAdminGenerateOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		return
+	}
+
+	if req.Username == "" || req.Password == "" {
+		utils.WriteError(w, http.StatusBadRequest, "INVALID_DATA", "Username dan Password (default) wajib diisi")
+		return
+	}
+
+	plainPassword, err := utils.DecryptField(req.Password)
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "DECRYPT_ERROR", "Gagal mendekripsi password")
+		return
+	}
+
+	otp, err := auth.GenerateOTP(req.Username, plainPassword)
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "GENERATE_FAILED", err.Error())
+		return
+	}
+
+	utils.WriteJSON(w, http.StatusOK, map[string]string{
+		"message": "OTP Berhasil digenerate. Berikan kode ini ke user segera.",
+		"otp":     otp,
+	})
 }

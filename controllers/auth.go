@@ -271,3 +271,58 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
+
+func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Hanya POST yang diizinkan")
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+		OTP      string `json:"otp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
+		return
+	}
+
+	plainUsername, err := utils.DecryptField(req.Username)
+	if err != nil {
+		// Just in case username is not encrypted, try raw
+		plainUsername = req.Username
+		if req.Username == "" {
+			utils.SendError(w, http.StatusBadRequest, "INVALID_DATA", "Username wajib diisi")
+			return
+		}
+	}
+
+	// OTP usually is not encrypted, but if it is, decrypt it. Assuming plain for now or match Frontend.
+	// Based on request "username dan otp", usually OTP is just 6 digits.
+
+	req.Username = plainUsername
+	userAgent := r.UserAgent()
+	ipAddress := r.RemoteAddr
+
+	token, err := auth.LoginWithOTP(req.Username, req.OTP, userAgent, ipAddress)
+	if err != nil {
+		utils.SendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
+		return
+	}
+
+	isProduction := config.AppConfig.AppEnv == "production"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		Secure:   isProduction,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	utils.SendSuccess(w, map[string]interface{}{
+		"message":              "Login berhasil via OTP",
+		"must_change_password": true, // Always true for OTP login
+	})
+}
