@@ -20,17 +20,17 @@ import (
 )
 
 type User struct {
-	ID                 int64     `json:"id"`
-	Username           string    `json:"username"`
-	PasswordHash       string    `json:"-"`
-	FullName           string    `json:"full_name"`
-	Email              string    `json:"email"`
-	IsAdmin            bool      `json:"is_admin"`
-	IsActive           bool      `json:"is_active"`
-	MustChangePassword bool      `json:"must_change_password"`
-	LastLoginAt        time.Time `json:"last_login_at"`
-	OTPCode            string    `json:"-"`
-	OTPExpiredAt       time.Time `json:"-"`
+	ID            int64     `json:"id"`
+	Username      string    `json:"username"`
+	PasswordHash  string    `json:"-"`
+	FullName      string    `json:"full_name"`
+	Email         string    `json:"email"`
+	IsAdmin       bool      `json:"is_admin"`
+	IsActive      bool      `json:"is_active"`
+	AccountStatus int       `json:"account_status"`
+	LastLoginAt   time.Time `json:"last_login_at"`
+	OTPCode       string    `json:"-"`
+	OTPExpiredAt  time.Time `json:"-"`
 }
 
 type LoginRequest struct {
@@ -67,8 +67,8 @@ func RegisterUser(req RegisterRequest) error {
 		return err
 	}
 	query := `
-		INSERT INTO app_users (username, password_hash, full_name, email, is_admin, is_active)
-		VALUES (:1, :2, :3, :4, :5, :6)
+		INSERT INTO app_users (username, password_hash, full_name, email, is_admin, is_active, account_status)
+		VALUES (:1, :2, :3, :4, :5, :6, :7)
 	`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -76,7 +76,7 @@ func RegisterUser(req RegisterRequest) error {
 
 	_, err = database.DbInstance.ExecContext(ctx, query,
 		req.Username, hashedPwd, req.FullName, req.Email,
-		constants.RegularUserRole, constants.ActiveUserStatus)
+		constants.RegularUserRole, constants.ActiveUserStatus, constants.AccountStatusPendingSetup)
 	if err != nil {
 		if strings.Contains(err.Error(), "ORA-00001") {
 			return errors.New("username sudah digunakan")
@@ -86,48 +86,52 @@ func RegisterUser(req RegisterRequest) error {
 	return nil
 }
 
-func LoginUser(req LoginRequest) (string, bool, error) {
+func LoginUser(req LoginRequest) (string, int, error) {
 
 	if req.Username == "" {
 		log.Println("[AUTH] Gagal: Username kosong")
-		return "", false, errors.New("username tidak boleh kosong")
+		return "", 0, errors.New("username tidak boleh kosong")
 	}
 
 	if req.Password == "" {
 		log.Println("[AUTH] Gagal: Password kosong")
-		return "", false, errors.New("password tidak boleh kosong")
+		return "", 0, errors.New("password tidak boleh kosong")
 	}
 
 	if database.DbInstance == nil {
-		return "", false, errors.New("database belum terkoneksi")
+		return "", 0, errors.New("database belum terkoneksi")
 	}
 
 	log.Printf("[AUTH] Login: User='%s', IP='%s'", req.Username, req.IPAddress)
 
 	var user User
-	var isAdmin, isActive, mustChangePassword int
+	var isAdmin, isActive, accountStatus int
 
 	query := `
-		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active, must_change_password
+		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active, account_status
 		FROM app_users WHERE username = :1
 	`
 	err := database.DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.FullName,
-		&isAdmin, &isActive, &mustChangePassword,
+		&isAdmin, &isActive, &accountStatus,
 	)
 
 	if err != nil {
 		log.Printf("[AUTH] User not found or DB error: %v", err)
-		return "", false, errors.New("username atau password salah")
+		return "", 0, errors.New("username atau password salah")
 	}
 
 	if !CheckPasswordHash(req.Password, user.PasswordHash) {
 		log.Printf("[AUTH] Wrong password for '%s'", req.Username)
-		return "", false, errors.New("username atau password salah")
+		return "", 0, errors.New("username atau password salah")
 	}
 
 	if isActive == constants.InactiveUserStatus {
-		return "", false, errors.New("akun dinonaktifkan silahkan hubungi administrator")
+		return "", 0, errors.New("akun dinonaktifkan silahkan hubungi administrator")
+	}
+
+	if accountStatus == constants.AccountStatusBlocked {
+		return "", 0, errors.New("akun anda diblokir. silahkan hubungi administrator")
 	}
 
 	expTime := time.Now().Add(24 * time.Hour)
@@ -140,7 +144,7 @@ func LoginUser(req LoginRequest) (string, bool, error) {
 
 	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
-		return "", false, err
+		return "", 0, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -162,11 +166,11 @@ func LoginUser(req LoginRequest) (string, bool, error) {
 
 	if err != nil {
 		log.Printf("[AUTH] Error Critical: Gagal simpan sesi: %v", err)
-		return "", false, errors.New("gagal membuat sesi login")
+		return "", 0, errors.New("gagal membuat sesi login")
 	}
 
 	log.Printf("[AUTH] Login Success: %s", user.Username)
-	return tokenString, (mustChangePassword == constants.TrueValue), nil
+	return tokenString, accountStatus, nil
 }
 
 func ChangePassword(userID int64, oldPassword, newPassword string) error {
@@ -201,13 +205,13 @@ func ChangePassword(userID int64, oldPassword, newPassword string) error {
 		return err
 	}
 
-	// 4. Update password & reset flag must_change_password
+	// 4. Update password & reset status to PERFECT (0)
 	queryUpdate := `
 		UPDATE app_users 
-		SET password_hash = :1, must_change_password = :2, last_login_at = CURRENT_TIMESTAMP 
+		SET password_hash = :1, account_status = :2, last_login_at = CURRENT_TIMESTAMP 
 		WHERE id_app_users = :3
 	`
-	_, err = database.DbInstance.ExecContext(context.Background(), queryUpdate, newHash, constants.FalseValue, userID)
+	_, err = database.DbInstance.ExecContext(context.Background(), queryUpdate, newHash, constants.AccountStatusPerfect, userID)
 	if err != nil {
 		return fmt.Errorf("gagal update password: %w", err)
 	}
@@ -313,16 +317,16 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 		return "", err
 	}
 
-	// 4. Update User: Set OTP, Expiry, New Default Password, MustChangePassword=1
+	// 4. Update User: Set OTP, Expiry, New Default Password, AccountStatus=ForgotPassword(2)
 	query := `UPDATE app_users SET 
 		otp_code = :1, 
 		otp_expired_at = :2, 
 		password_hash = :3, 
-		must_change_password = :4 
+		account_status = :4 
 		WHERE username = :5`
 
 	result, err := database.DbInstance.ExecContext(context.Background(), query,
-		otpCode, expiry, hashed, constants.TrueValue, username)
+		otpCode, expiry, hashed, constants.AccountStatusForgotPassword, username)
 
 	if err != nil {
 		return "", fmt.Errorf("gagal update OTP: %w", err)
@@ -336,32 +340,34 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 	return otpCode, nil
 }
 
-// LoginWithOTP validates OTP and logs the user in
-func LoginWithOTP(username, otp string, userAgent, ipAddress string) (string, error) {
+// LoginWithOTP validates OTP and logs the user in, returning token and account status
+func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, error) {
 	if database.DbInstance == nil {
-		return "", errors.New("database belum terkoneksi")
+		return "", 0, errors.New("database belum terkoneksi")
 	}
 
 	var user User
-	var isAdmin, isActive, mustChangePassword int
-	var dbOTP string
-	var dbExpiry time.Time
-
 	// 1. Get User Data
+	var dbOTP string
+	var otpExpiredAt time.Time
+	var isAdminInt int
+	var isActiveInt int
+	var accountStatus int
+
 	// Note: We use string scan for valid OTP check, avoiding NULL issues if OTP is null
 	var dbOTPRaw interface{}
 	var dbExpiryRaw interface{}
 
 	query := `
-		SELECT id_app_users, username, full_name, is_admin, is_active, must_change_password, otp_code, otp_expired_at
+		SELECT id_app_users, username, full_name, is_admin, is_active, account_status, otp_code, otp_expired_at
 		FROM app_users WHERE username = :1
 	`
 	err := database.DbInstance.QueryRowContext(context.Background(), query, username).Scan(
-		&user.ID, &user.Username, &user.FullName, &isAdmin, &isActive, &mustChangePassword, &dbOTPRaw, &dbExpiryRaw,
+		&user.ID, &user.Username, &user.FullName, &isAdminInt, &isActiveInt, &accountStatus, &dbOTPRaw, &dbExpiryRaw,
 	)
 
 	if err != nil {
-		return "", errors.New("user tidak ditemukan")
+		return "", 0, errors.New("user tidak ditemukan")
 	}
 
 	if dbOTPRaw != nil {
@@ -369,22 +375,24 @@ func LoginWithOTP(username, otp string, userAgent, ipAddress string) (string, er
 	}
 	if dbExpiryRaw != nil {
 		if t, ok := dbExpiryRaw.(time.Time); ok {
-			dbExpiry = t
+			otpExpiredAt = t
 		}
 	}
 
 	// 2. Validate OTP
 	if dbOTP == "" || dbOTP != otp {
-		return "", errors.New("kode OTP salah atau tidak ditemukan")
+		return "", 0, errors.New("kode OTP tidak sama")
 	}
 
 	// 3. Validate Expiry
-	if time.Now().After(dbExpiry) {
-		return "", errors.New("kode OTP sudah kadaluarsa")
+	if time.Now().After(otpExpiredAt) {
+		return "", 0, errors.New("kode OTP sudah kadaluarsa")
 	}
 
-	if isActive == constants.InactiveUserStatus {
-		return "", errors.New("akun dinonaktifkan")
+	var isActive bool = (utils.InterfaceToInt(isActiveInt) == constants.ActiveUserStatus)
+
+	if !isActive {
+		return "", 0, errors.New("akun dinonaktifkan")
 	}
 
 	// 4. Consume OTP (Clear it)
@@ -400,13 +408,13 @@ func LoginWithOTP(username, otp string, userAgent, ipAddress string) (string, er
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id":  user.ID,
 		"username": user.Username,
-		"is_admin": isAdmin == constants.AdminRoleValue,
+		"is_admin": isAdminInt == constants.AdminRoleValue,
 		"exp":      expTime.Unix(),
 	})
 
 	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	// 6. Create Session
@@ -417,69 +425,8 @@ func LoginWithOTP(username, otp string, userAgent, ipAddress string) (string, er
 	`, user.ID, tokenString, userAgent, ipAddress, expTime)
 
 	if err != nil {
-		return "", errors.New("gagal membuat sesi")
+		return "", 0, errors.New("gagal membuat sesi")
 	}
 
-	return tokenString, nil
-}
-
-// GetAllUsers retrieves all users, optionally filtered by search term
-func GetAllUsers(search string) ([]User, error) {
-	if database.DbInstance == nil {
-		return nil, errors.New("database belum terkoneksi")
-	}
-
-	var users []User
-	var query string
-	var args []interface{}
-
-	baseQuery := `
-		SELECT id_app_users, username, full_name, email, is_admin, is_active, must_change_password, last_login_at 
-		FROM app_users
-	`
-
-	if search != "" {
-		query = baseQuery + " WHERE (LOWER(username) LIKE :1 OR LOWER(full_name) LIKE :2)"
-		searchParam := "%" + strings.ToLower(search) + "%"
-		args = append(args, searchParam, searchParam)
-	} else {
-		query = baseQuery
-	}
-
-	query += " ORDER BY id_app_users ASC"
-
-	rows, err := database.DbInstance.QueryContext(context.Background(), query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("gagal query users: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var u User
-		var isAdminInt, isActiveInt, mustChangeInt interface{}
-		var lastLoginRaw interface{} // Handle nullable timestamp
-
-		err := rows.Scan(
-			&u.ID, &u.Username, &u.FullName, &u.Email,
-			&isAdminInt, &isActiveInt, &mustChangeInt, &lastLoginRaw,
-		)
-		if err != nil {
-			log.Printf("[AUTH] Warning scan user: %v", err)
-			continue
-		}
-
-		u.IsAdmin = (utils.InterfaceToInt(isAdminInt) == constants.AdminRoleValue)
-		u.IsActive = (utils.InterfaceToInt(isActiveInt) == constants.ActiveUserStatus)
-		u.MustChangePassword = (utils.InterfaceToInt(mustChangeInt) == constants.TrueValue)
-
-		if lastLoginRaw != nil {
-			if t, ok := lastLoginRaw.(time.Time); ok {
-				u.LastLoginAt = t
-			}
-		}
-
-		users = append(users, u)
-	}
-
-	return users, nil
+	return tokenString, accountStatus, nil
 }

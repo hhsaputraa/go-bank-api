@@ -239,17 +239,17 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 
 	// Query DB
 	var user auth.User
-	var isAdminInt, isActiveInt, mustChangePasswordInt interface{}
+	var isAdminInt, isActiveInt, accountStatusInt interface{}
 
 	// Sesuaikan nama kolom dengan tabel Anda
 	query := `
-		SELECT id_app_users, username, full_name, email, is_admin, is_active, last_login_at, must_change_password 
+		SELECT id_app_users, username, full_name, email, is_admin, is_active, last_login_at, account_status 
 		FROM app_users 
 		WHERE id_app_users = :1
 	`
 	err := database.DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
 		&user.ID, &user.Username, &user.FullName, &user.Email,
-		&isAdminInt, &isActiveInt, &user.LastLoginAt, &mustChangePasswordInt,
+		&isAdminInt, &isActiveInt, &user.LastLoginAt, &accountStatusInt,
 	)
 
 	if err != nil {
@@ -260,7 +260,7 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 
 	user.IsAdmin = (utils.InterfaceToInt(isAdminInt) == 7)
 	user.IsActive = (utils.InterfaceToInt(isActiveInt) == 1)
-	user.MustChangePassword = (utils.InterfaceToInt(mustChangePasswordInt) == 1)
+	user.AccountStatus = utils.InterfaceToInt(accountStatusInt)
 
 	// Response Sukses
 	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -304,7 +304,7 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 	userAgent := r.UserAgent()
 	ipAddress := r.RemoteAddr
 
-	token, err := auth.LoginWithOTP(req.Username, req.OTP, userAgent, ipAddress)
+	token, accountStatus, err := auth.LoginWithOTP(req.Username, req.OTP, userAgent, ipAddress)
 	if err != nil {
 		utils.SendError(w, http.StatusUnauthorized, "LOGIN_FAILED", err.Error())
 		return
@@ -322,7 +322,7 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	utils.SendSuccess(w, map[string]interface{}{
-		"message":              "Login berhasil via OTP",
-		"must_change_password": true, // Always true for OTP login
+		"message":        "Login berhasil via OTP",
+		"account_status": accountStatus,
 	})
 }

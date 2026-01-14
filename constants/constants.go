@@ -81,6 +81,12 @@ const (
 	// Boolean constants for database (Oracle NUMBER(1))
 	TrueValue  = 1
 	FalseValue = 0
+
+	// Account Status
+	AccountStatusPerfect        = 0
+	AccountStatusPendingSetup   = 1
+	AccountStatusForgotPassword = 2
+	AccountStatusBlocked        = 3
 )
 
 // LLM Models

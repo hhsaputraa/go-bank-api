@@ -18,7 +18,7 @@ func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
 	var datas []UserResponseModel
 
 	query := `
-		SELECT id_app_users, username, full_name, email, is_admin, is_active, must_change_password, last_login_at, otp_code, otp_expired_at
+		SELECT id_app_users, username, full_name, email, is_admin, is_active, account_status, last_login_at, otp_code, otp_expired_at
 		FROM app_users
 		ORDER BY id_app_users ASC
 	`
@@ -32,14 +32,14 @@ func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
 
 	for rows.Next() {
 		var u UserResponseModel
-		var isAdminInt, isActiveInt, mustChangeInt interface{}
+		var isAdminInt, isActiveInt, accountStatus int
 		var lastLoginRaw interface{}
 		var otpCode interface{}
 		var otpExpiredAt interface{}
 
 		err := rows.Scan(
 			&u.Id_app_users, &u.Username, &u.Full_name, &u.Email,
-			&isAdminInt, &isActiveInt, &mustChangeInt, &lastLoginRaw,
+			&isAdminInt, &isActiveInt, &accountStatus, &lastLoginRaw,
 			&otpCode, &otpExpiredAt,
 		)
 		if err != nil {
@@ -49,7 +49,7 @@ func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
 
 		u.Is_admin = (utils.InterfaceToInt(isAdminInt) == constants.AdminRoleValue)
 		u.Is_active = (utils.InterfaceToInt(isActiveInt) == constants.ActiveUserStatus)
-		u.Must_change_password = (utils.InterfaceToInt(mustChangeInt) == constants.TrueValue)
+		u.Account_status = accountStatus
 
 		if lastLoginRaw != nil {
 			if t, ok := lastLoginRaw.(time.Time); ok {
