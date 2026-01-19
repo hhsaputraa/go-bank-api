@@ -9,6 +9,7 @@ type QueryRequest struct {
 
 type PromptRequest struct {
 	Prompt string `json:"prompt"`
+	Model  string `json:"model,omitempty"`
 }
 
 type FeedbackRequest struct {

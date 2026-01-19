@@ -20,7 +20,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	clientIP := r.RemoteAddr
 	// CORS is handled by global middleware
 
-	normalizedPrompt, ok := parseAndValidateRequest(w, r)
+	normalizedPrompt, selectedModel, ok := parseAndValidateRequest(w, r)
 	if !ok {
 		return
 	}
@@ -36,7 +36,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		logger.RecordActivity(clientIP, normalizedPrompt, detectedIntent, generatedSQL, finalStatus, finalError, time.Since(startTime))
 	}()
 
-	log.Printf("Menerima Prompt (Normalized): %s", normalizedPrompt)
+	log.Printf("Menerima Prompt (Normalized): %s | Model: %s", normalizedPrompt, selectedModel)
 
 	if handleAbsurdityCheck(r.Context(), w, normalizedPrompt) {
 		return
@@ -51,7 +51,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	aiResp, err := ai.GetSQL(normalizedPrompt)
+	aiResp, err := ai.GetSQLWithModel(normalizedPrompt, selectedModel)
 	if err != nil {
 		handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
 		return
@@ -133,29 +133,52 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	if r.Method != http.MethodPost {
 		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
-		return "", false
+		return "", "", false
 	}
 	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidJSON, "Format JSON tidak valid")
-		return "", false
+		return "", "", false
 	}
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeEmptyPrompt, "Prompt tidak boleh kosong")
-		return "", false
+		return "", "", false
 	}
 
 	if err := utils.ValidatePromptSanity(normalizedPrompt); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, err.Error())
-		return "", false
+		return "", "", false
 	}
 
-	return normalizedPrompt, true
+	// Default model if not specified
+	selectedModel := req.Model
+	if selectedModel == "" {
+		selectedModel = constants.GroqModelDefault
+	}
+
+	// Validate model against allowed list
+	allowedModels := map[string]bool{
+		constants.ModelQwen32B:    true,
+		constants.ModelGPTOss120B: true,
+		constants.ModelGPTOss20B:  true,
+	}
+
+	if !allowedModels[selectedModel] {
+		// Fallback or Error?
+		// For now, let's strictly enforce usage of known models to avoid billing surprises or errors
+		// But if they send something else, maybe we just warn and use default?
+		// Let's stick to the request: "bisa disesuaikan dengan pilihan 3 model berikut"
+		// If it's not one of them, we return error.
+		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, "Model AI tidak valid. Pilih antara: "+constants.ModelQwen32B+", "+constants.ModelGPTOss120B+", "+constants.ModelGPTOss20B)
+		return "", "", false
+	}
+
+	return normalizedPrompt, selectedModel, true
 }
 
 func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt string) bool {
@@ -175,10 +198,14 @@ func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt str
 
 func handleAIError(w http.ResponseWriter, err error, intent *string, status *string, finalErr *error) {
 	if appErr, ok := err.(*models.AppError); ok {
-		if appErr.Code == constants.ErrCodeChitChat {
+		if appErr.Code == constants.ErrCodeChitChat || appErr.Code == constants.ErrCodeAiRefusal {
 			*intent = "CHAT/OFF_TOPIC"
+			if appErr.Code == constants.ErrCodeAiRefusal {
+				*intent = "AI_REFUSAL"
+			}
 			*status = constants.StatusSuccess
-			utils.SendError(w, http.StatusBadRequest, "CHAT_RESPONSE", appErr.Message)
+			// Kita kirim sebagai CHAT_RESPONSE agar frontend menampilkannya sebagai pesan bot (tipe warning/text)
+			utils.SendError(w, http.StatusOK, "CHAT_RESPONSE", appErr.Message)
 			return
 		}
 		log.Printf("Handled Error: %s - %s", appErr.Code, appErr.Message)

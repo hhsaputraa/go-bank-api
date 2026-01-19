@@ -57,7 +57,7 @@ func GenerateEmbedding(text string) ([]float32, error) {
 	return res.Embedding.Values, nil
 }
 
-func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
+func fetchLLMResponse(ctx context.Context, prompt string, modelOverride string) (string, error) {
 	if config.AppConfig != nil && config.AppConfig.OllamaURL != "" {
 		log.Printf("Mencoba Ollama LLM lokal...")
 		ollamaReq := map[string]any{"model": config.AppConfig.OllamaModel, "prompt": prompt, "stream": false}
@@ -81,7 +81,13 @@ func fetchLLMResponse(ctx context.Context, prompt string) (string, error) {
 		TopP:            0.95,
 		ReasoningFormat: "hidden",
 	}
-	return callGroqAPI(prompt, config.AppConfig.GroqModel, opts)
+
+	selectedModel := config.AppConfig.GroqModel
+	if modelOverride != "" {
+		selectedModel = modelOverride
+	}
+
+	return callGroqAPI(prompt, selectedModel, opts)
 }
 
 func callGroqAPI(prompt string, model string, options GroqOptions) (string, error) {

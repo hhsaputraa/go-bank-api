@@ -28,6 +28,7 @@ const (
 	ErrCodeEnhanceFailed      = "ENHANCE_FAILED"
 	ErrCodeDecryptFail        = "DECRYPT_FAIL"
 	ErrCodeLoginFailed        = "LOGIN_FAILED"
+	ErrCodeAiRefusal          = "AI_REFUSAL"
 )
 
 // Intent Types
@@ -96,6 +97,11 @@ const (
 
 	// GroqModelDefault is the default model from config
 	GroqModelDefault = "qwen/qwen3-32b"
+
+	// Available Models
+	ModelQwen32B    = "qwen/qwen3-32b"
+	ModelGPTOss120B = "openai/gpt-oss-120b" // Note: Check provider availability
+	ModelGPTOss20B  = "openai/gpt-oss-20b"  // Note: Check provider availability
 )
 
 // Qdrant Categories

@@ -115,7 +115,12 @@ func LearnFromCorrection(prompt string, validSQL string) {
 	}(prompt, validSQL)
 }
 
-func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {
+func GetSQL(userPrompt string) (models.AISqlResponse, error) {
+	// Default to empty model (uses config default)
+	return GetSQLWithModel(userPrompt, "")
+}
+
+func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse, error) {
 	if utils.IsRawSQL(userPrompt) {
 		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
 		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
@@ -171,17 +176,29 @@ func GetSQLFromAI_Groq(userPrompt string) (models.AISqlResponse, error) {
 
 	finalPrompt := buildFinalPrompt(userPrompt, allDDLString, refDataString, businessDict, sqlContext, softCacheContext)
 
-	rawContent, err := fetchLLMResponse(ctx, finalPrompt)
+	rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
 	if err != nil {
 		return models.AISqlResponse{}, err
 	}
 
-	sqlQuery := extractSQLFromMarkdown(rawContent)
-	log.Printf("🤖 RAW AI Response:\n%s\n", rawContent)
+	// Clean Chain of Thought from Raw Content
+	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
+	cleanContent := reThinking.ReplaceAllString(rawContent, "")
+	cleanContent = strings.TrimSpace(cleanContent)
+
+	sqlQuery := extractSQLFromMarkdown(cleanContent)
+	log.Printf("🤖 RAW AI Response (Cleaned):\n%s\n", cleanContent)
 	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
 
 	sqlQuery = sanitizeSQL(sqlQuery)
 	if sqlQuery == "" {
+		// Jika SQL kosong tapi ada content (setelah dibersihkan dari thought), kemungkinan AI menolak/menjelaskan sesuatu
+		if len(cleanContent) > 0 {
+			return models.AISqlResponse{}, &models.AppError{
+				Code:    constants.ErrCodeAiRefusal,
+				Message: cleanContent,
+			}
+		}
 		return models.AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
 	}
 
@@ -343,8 +360,10 @@ func buildFinalPrompt(userPrompt, ddl, refData, dict, ragContext, softCache stri
 Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: %s.
 
 == 1. KAMUS DATA (DDL & STRUKTUR) ==
-Gunakan Schema Database berikut:
+BERIKUT ADALAH SATU-SATUNYA SUMBER KEBENARAN UNTUK NAMA TABEL DAN KOLOM.
+JANGAN pernah menggunakan nama tabel atau kolom yang tidak tercantum di bawah ini.
 %s
+ATURAN KERAS: Jika user meminta data atau entitas lain yang TIDAK ADA di schema di atas, MAKA ITU TIDAK ADA. Jangan mengarang tabel.
 
 == 2. LIVE DATA REFERENSI (PENTING: JANGAN MENEBAK ID) ==
 Gunakan ID yang tertera di sini jika query membutuhkan filter berdasarkan Status, Tipe, atau Kategori.
@@ -362,16 +381,26 @@ Gunakan contoh di bawah ini sebagai referensi utama pola query jika relevan.
 %s
 
 == ATURAN PENULISAN SQL (ZERO-SHOT & RAG) ==
-1. **Priority Reference**: Jika user menyebut "Tabungan", "Deposito", "Aktif", atau "Tutup", WAJIB cek bagian "LIVE DATA REFERENSI" untuk mendapatkan ID yang tepat. Jangan menebak "1" atau "0".
-2. **Column Validation**: Hanya gunakan kolom yang ADA di DDL di atas.
-3. **Security**: Hanya SELECT. Dilarang INSERT/UPDATE/DELETE.
+1. **STRICT SCHEMA ONLY**: Hanya gunakan tabel dan kolom yang TERTULIS EKSPLISIT di bagian "KAMUS DATA".
+2. **NO HALLUCINATION**: Jika konsep user tidak ada tabelnya, cari tabel yang paling relevan (misal "transaksi" tipe kredit) atau kembalikan error "Data tidak ditemukan di schema".
+3. **Priority Reference**: Jika user menyebut "Tabungan", "Deposito", "Aktif", atau "Tutup", WAJIB cek bagian "LIVE DATA REFERENSI" untuk mendapatkan ID yang tepat. Jangan menebak "1" atau "0".
+4. **Security**: Hanya SELECT. Dilarang INSERT/UPDATE/DELETE.
 
 == TUGAS ANDA (CHAIN OF THOUGHT) ==
-Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat:
-1. **Analisis Intent**: Apa data yang dicari user?
-2. **Mapping Referensi**: Apakah ada kata kunci (misal: "blokir") yang perlu dicari ID-nya di "LIVE DATA REFERENSI"? Jika ada, sebutkan nilai-nya.
-3. **Strategi Query**: Table mana yang di-JOIN? Apa kondisi WHERE-nya?
-4. **SQL Final**: Tulis query dalam blok markdown code.
+Sebelum menulis kode SQL, jelaskan langkah berpikir Anda secara singkat di dalam tag <thought>.
+Isi <thought> TIDAK AKAN ditampilkan ke user, jadi tulislah analisis teknis di sini.
+Di LUAR tag <thought>, tuliskan pesan untuk user (jika menolak) atau Kode SQL (jika berhasil).
+
+FORMAT OUTPUT WAJIB:
+<thought>
+1. Validasi Schema: ...
+2. Analisis Intent: ...
+</thought>
+[PESAN USER SYSTEM / SQL CODE]
+
+Aturan Pesan Penolakan (Jika data tidak ada):
+1. JANGAN menyebutkan istilah teknis seperti "Schema", "DDL", "Metadata", atau nama tabel (misal "MASTER_TIPE_NASABAH") kepada user.
+2. Gunakan bahasa natural dan sopan. Contoh: "Mohon maaf, data terkait pinjaman belum tersedia dalam sistem kami saat ini."
 
 Pertanyaan Pengguna: "%s"
 `, time.Now().Format("2006-01-02"), ddl, refData, dict, ragContext, softCache, userPrompt)

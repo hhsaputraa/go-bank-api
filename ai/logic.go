@@ -2,11 +2,9 @@ package ai
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	config "go-bank-api/config"
 	database "go-bank-api/database"
-	models "go-bank-api/models"
 	"log"
 	"strings"
 	"time"
@@ -15,20 +13,6 @@ import (
 type QueryResult struct {
 	Columns []string        `json:"columns"`
 	Rows    [][]interface{} `json:"rows"`
-}
-
-func GetSQL(userPrompt string) (models.AISqlResponse, error) {
-	log.Println("Memanggil AI Service (dengan semantic cache)...")
-
-	aiResp, err := GetSQLFromAI_Groq(userPrompt)
-	if err != nil {
-		return models.AISqlResponse{}, err
-	}
-	if aiResp.SQL == "" && !aiResp.IsAmbiguous {
-		return models.AISqlResponse{}, errors.New("AI tidak mengembalikan query SQL.")
-	}
-
-	return aiResp, nil
 }
 
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
