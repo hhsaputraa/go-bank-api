@@ -181,7 +181,6 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return models.AISqlResponse{}, err
 	}
 
-	// Clean Chain of Thought from Raw Content
 	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
 	cleanContent := reThinking.ReplaceAllString(rawContent, "")
 	cleanContent = strings.TrimSpace(cleanContent)
@@ -192,7 +191,6 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 	sqlQuery = sanitizeSQL(sqlQuery)
 	if sqlQuery == "" {
-		// Jika SQL kosong tapi ada content (setelah dibersihkan dari thought), kemungkinan AI menolak/menjelaskan sesuatu
 		if len(cleanContent) > 0 {
 			return models.AISqlResponse{}, &models.AppError{
 				Code:    constants.ErrCodeAiRefusal,

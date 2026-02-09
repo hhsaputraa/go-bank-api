@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main
+test
+
+# Environment variables
+.env
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

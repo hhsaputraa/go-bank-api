@@ -1,4 +1,6 @@
 .env
+.env.*
+.env.docker
 cache.json
 data_cache.json
 backup_ai_service.txt
