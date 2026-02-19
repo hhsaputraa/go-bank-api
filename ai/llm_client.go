@@ -54,6 +54,14 @@ func GenerateEmbedding(text string) ([]float32, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// TRUNCATION LOGIC: Force fit to config size
+	targetSize := config.AppConfig.EmbeddingVectorSize
+	if len(res.Embedding.Values) > targetSize {
+		// Log warning once or debug level if possible
+		return res.Embedding.Values[:targetSize], nil
+	}
+
 	return res.Embedding.Values, nil
 }
 
