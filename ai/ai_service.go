@@ -527,3 +527,76 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 	log.Printf("ROUTER DECISION: [%s] untuk input '%s'", result.Category, userInput)
 	return result.Category, nil
 }
+
+func ResolveContext(ctx context.Context, currentPrompt string, history []models.ChatMessage) (string, error) {
+	if len(history) == 0 {
+		return currentPrompt, nil
+	}
+
+	// Build history string
+	var sb strings.Builder
+	// Take last 5 messages to avoid token limit and maintain relevance
+	startIdx := 0
+	if len(history) > 5 {
+		startIdx = len(history) - 5
+	}
+
+	for _, msg := range history[startIdx:] {
+		role := "User"
+		if msg.Role == "model" || msg.Role == "bot" {
+			role = "Assistant"
+		}
+		// Truncate long content
+		content := msg.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n", role, content))
+	}
+
+	systemPrompt := `
+Anda adalah asisten AI yang cerdas. Tugas Anda adalah menulis ulang (rewrite) pertanyaan user terbaru agar menjadi kalimat yang LENGKAP dan BERDIRI SENDIRI (Standalone), berdasarkan konteks percakapan sebelumnya.
+
+Aturan:
+1. Jika pertanyaan user sudah lengkap dan jelas, JANGAN diubah (kembalikan sama persis).
+2. Jika pertanyaan user bergantung pada konteks sebelumnya (misal: "bagaimana dengan Jakarta?", "tampilkan yang aktif saja"), gabungkan dengan informasi sebelumnya menjadi satu kalimat utuh.
+3. JANGAN MENJAWAB PERTANYAANNYA. Hanya menulis ulang pertanyaan.
+4. Output hanyalah kalimat hasil rewrite.
+
+Contoh:
+History:
+User: Tampilkan semua nasabah.
+Assistant: Berikut daftar nasabah...
+User: Yang ada di Bandung.
+
+Output:
+Tampilkan semua nasabah yang berdomisili di Bandung.
+
+---
+History Percakapan:
+%s
+
+User saat ini: %s
+Output (Standalone Prompt):`
+
+	finalPrompt := fmt.Sprintf(systemPrompt, sb.String(), currentPrompt)
+
+	opts := GroqOptions{
+		Temperature: 0.1,
+		TopP:        0.5,
+	}
+
+	log.Println("Resolving Context...")
+	resolved, err := callGroqAPI(finalPrompt, "llama-3.1-8b-instant", opts)
+	if err != nil {
+		log.Printf("Gagal resolve context: %v. Menggunakan prompt asli.", err)
+		return currentPrompt, nil
+	}
+
+	resolved = strings.TrimSpace(resolved)
+	// Remove occasional quotes or prefixes
+	resolved = strings.Trim(resolved, "\"'")
+
+	log.Printf("Context Resolved: '%s' -> '%s'", currentPrompt, resolved)
+	return resolved, nil
+}

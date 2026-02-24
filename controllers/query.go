@@ -20,7 +20,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	clientIP := r.RemoteAddr
 	// CORS is handled by global middleware
 
-	normalizedPrompt, selectedModel, ok := parseAndValidateRequest(w, r)
+	normalizedPrompt, selectedModel, history, ok := parseAndValidateRequest(w, r)
 	if !ok {
 		return
 	}
@@ -38,11 +38,24 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima Prompt (Normalized): %s | Model: %s", normalizedPrompt, selectedModel)
 
-	if handleAbsurdityCheck(r.Context(), w, normalizedPrompt) {
+	// --- CONTEXT RESOLUTION (CONTINUOUS CHAT) ---
+	resolvedPrompt := normalizedPrompt
+	if len(history) > 0 {
+		var err error
+		resolvedPrompt, err = ai.ResolveContext(r.Context(), normalizedPrompt, history)
+		if err != nil {
+			log.Printf("Warning: Failed to resolve context, using original prompt. Error: %v", err)
+		} else if resolvedPrompt != normalizedPrompt {
+			log.Printf("CONTEXT REWRITTEN: '%s' -> '%s'", normalizedPrompt, resolvedPrompt)
+		}
+	}
+	// ---------------------------------------------
+
+	if handleAbsurdityCheck(r.Context(), w, resolvedPrompt) {
 		return
 	}
 
-	if err := utils.ValidateSafePrompt(normalizedPrompt); err != nil {
+	if err := utils.ValidateSafePrompt(resolvedPrompt); err != nil {
 		detectedIntent = constants.IntentAttack
 		finalStatus = "BLOCKED"
 		finalError = err
@@ -51,7 +64,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	aiResp, err := ai.GetSQLWithModel(normalizedPrompt, selectedModel)
+	aiResp, err := ai.GetSQLWithModel(resolvedPrompt, selectedModel)
 	if err != nil {
 		handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
 		return
@@ -133,26 +146,26 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, string, []models.ChatMessage, bool) {
 	if r.Method != http.MethodPost {
 		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
-		return "", "", false
+		return "", "", nil, false
 	}
 	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidJSON, "Format JSON tidak valid")
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeEmptyPrompt, "Prompt tidak boleh kosong")
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	if err := utils.ValidatePromptSanity(normalizedPrompt); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, err.Error())
-		return "", "", false
+		return "", "", nil, false
 	}
 
 	// Default model if not specified
@@ -175,10 +188,10 @@ func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, st
 		// Let's stick to the request: "bisa disesuaikan dengan pilihan 3 model berikut"
 		// If it's not one of them, we return error.
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, "Model AI tidak valid. Pilih antara: "+constants.ModelQwen32B+", "+constants.ModelGPTOss120B+", "+constants.ModelGPTOss20B)
-		return "", "", false
+		return "", "", nil, false
 	}
 
-	return normalizedPrompt, selectedModel, true
+	return normalizedPrompt, selectedModel, req.History, true
 }
 
 func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt string) bool {
