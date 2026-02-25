@@ -22,8 +22,9 @@ import (
 )
 
 var (
-	qdrantClient   *pb.Client
-	geminiEmbedder *genai.EmbeddingModel
+	qdrantClient    *pb.Client
+	geminiEmbedder  *genai.EmbeddingModel
+	sqlChainService *SQLChainService
 )
 
 type IntentResponse struct {
@@ -69,6 +70,16 @@ func InitVectorService() error {
 	}
 
 	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
+
+	// Inisialisasi LangChain SQL Service
+	chainService, err := NewSQLChainService()
+	if err != nil {
+		log.Printf("Warning: Gagal inisialisasi SQLChainService: %v", err)
+	} else {
+		sqlChainService = chainService
+		log.Println("✅ Berhasil menginisialisasi LangChain Modularity Chain.")
+	}
+
 	return nil
 }
 
@@ -176,25 +187,59 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 	finalPrompt := buildFinalPrompt(userPrompt, allDDLString, refDataString, businessDict, sqlContext, softCacheContext)
 
-	rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
-	if err != nil {
-		return models.AISqlResponse{}, err
+	// --- BARU: Menggunakan LangChain Modularity Chain ---
+	var cleanContent string
+	if sqlChainService != nil {
+		log.Println("🔗 Mengeksekusi via LangChain SQL Chain...")
+		contextData := map[string]interface{}{
+			"today":        time.Now().Format("2006-01-02"),
+			"ddl":          allDDLString,
+			"refData":      refDataString,
+			"businessDict": businessDict,
+			"ragContext":   sqlContext,
+			"softCache":    softCacheContext,
+			"userPrompt":   userPrompt,
+		}
+
+		chainOutput, err := sqlChainService.GenerateSQL(ctx, userPrompt, contextData)
+		if err != nil {
+			log.Printf("⚠️ LangChain Error: %v. Fallback ke legacy implementation.", err)
+			rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
+			if err != nil {
+				return models.AISqlResponse{}, err
+			}
+			cleanContent = rawContent
+		} else {
+			cleanContent = chainOutput
+		}
+	} else {
+		// Legacy Implementation
+		rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
+		if err != nil {
+			return models.AISqlResponse{}, err
+		}
+		cleanContent = rawContent
 	}
 
 	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
-	cleanContent := reThinking.ReplaceAllString(rawContent, "")
-	cleanContent = strings.TrimSpace(cleanContent)
+	thoughtMatch := reThinking.FindString(cleanContent)
+	if thoughtMatch != "" {
+		log.Printf("💭 AI Thought Process: %s", thoughtMatch)
+	}
 
-	sqlQuery := extractSQLFromMarkdown(cleanContent)
-	log.Printf("🤖 RAW AI Response (Cleaned):\n%s\n", cleanContent)
-	log.Println("SQL dari AI (Dynamic RAG):", sqlQuery)
+	cleanContentText := reThinking.ReplaceAllString(cleanContent, "")
+	cleanContentText = strings.TrimSpace(cleanContentText)
+
+	sqlQuery := extractSQLFromMarkdown(cleanContentText)
+	log.Printf("🤖 RAW AI Response (Cleaned):\n%s\n", cleanContentText)
+	log.Println("SQL dari AI (Dynamic RAG via Chain):", sqlQuery)
 
 	sqlQuery = sanitizeSQL(sqlQuery)
 	if sqlQuery == "" {
-		if len(cleanContent) > 0 {
+		if len(cleanContentText) > 0 {
 			return models.AISqlResponse{}, &models.AppError{
 				Code:    constants.ErrCodeAiRefusal,
-				Message: cleanContent,
+				Message: cleanContentText,
 			}
 		}
 		return models.AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")

@@ -9,10 +9,8 @@ import (
 	config "go-bank-api/config"
 	database "go-bank-api/database"
 
-	"github.com/google/generative-ai-go/genai"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"google.golang.org/api/option"
 )
 
 func MainTrain() {
@@ -36,13 +34,6 @@ func MainTrain() {
 	}
 	log.Println("Koneksi DB Postgres untuk baca skema... OK.")
 
-	// Initialize Google AI client for embeddings
-	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(config.AppConfig.GoogleAPIKey))
-	if err != nil {
-		log.Fatalf("Gagal membuat client Gemini: %v", err)
-	}
-	defer geminiClient.Close()
-	embedder := geminiClient.EmbeddingModel(config.AppConfig.EmbeddingModel)
 	log.Printf("agar bersih...", config.AppConfig.QdrantCollectionName)
 	if err := qdrantDeleteCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName); err != nil {
 		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)
@@ -74,7 +65,7 @@ func MainTrain() {
 	// A. PROSES DDL (Label: "ddl")
 	log.Printf("Memproses %d DDL...", len(dynamicDDLs))
 	for i, content := range dynamicDDLs {
-		res, err := embedder.EmbedContent(ctx, genai.Text(content))
+		vector, err := GenerateEmbedding(content)
 		if err != nil {
 			log.Printf("Skip DDL #%d: %v", i, err)
 			continue
@@ -82,7 +73,7 @@ func MainTrain() {
 
 		point := qdrantPoint{
 			ID:     uuid.NewString(),
-			Vector: res.Embedding.Values,
+			Vector: vector,
 			Payload: map[string]interface{}{
 				"content":  content,
 				"category": "ddl",
@@ -99,7 +90,7 @@ func MainTrain() {
 		cleanPrompt = strings.TrimSpace(cleanPrompt)
 		log.Printf("Embedding Prompt Bersih: '%s'", cleanPrompt)
 
-		res, err := embedder.EmbedContent(ctx, genai.Text(cleanPrompt)) // Asumsi struct baru
+		vector, err := GenerateEmbedding(cleanPrompt)
 		if err != nil {
 			log.Printf("Skip SQL #%d: %v", i, err)
 			continue
@@ -107,7 +98,7 @@ func MainTrain() {
 
 		point := qdrantPoint{
 			ID:     uuid.NewString(),
-			Vector: res.Embedding.Values,
+			Vector: vector,
 			Payload: map[string]interface{}{
 				"content":        item.FullContent,
 				"prompt_preview": cleanPrompt,

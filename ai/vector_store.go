@@ -159,23 +159,41 @@ func UpdateQdrantPoint(collectionName string, id string, prompt string, sqlQuery
 }
 
 func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataResponse, error) {
-	scrollResp, err := qdrantClient.Scroll(context.Background(), &pb.ScrollPoints{
-		CollectionName: collectionName, Limit: &limit, WithPayload: pb.NewWithPayload(true),
-	})
+	url := fmt.Sprintf("%s/collections/%s/points/scroll", config.AppConfig.QdrantURL, collectionName)
+	req := map[string]interface{}{
+		"limit":        limit,
+		"with_payload": true,
+		"with_vector":  false,
+	}
+
+	resp, body, err := httpDoJSON(context.Background(), "POST", url, req)
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("qdrant scroll error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var scrollResp struct {
+		Result struct {
+			Points []struct {
+				ID      interface{}            `json:"id"`
+				Payload map[string]interface{} `json:"payload"`
+			} `json:"points"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(body, &scrollResp); err != nil {
+		return nil, fmt.Errorf("gagal unmarshal scroll response: %w", err)
+	}
+
 	var results []QdrantDataResponse
-	for _, item := range scrollResp {
-		idStr := item.Id.GetUuid()
-		if idStr == "" {
-			idStr = fmt.Sprintf("%d", item.Id.GetNum())
-		}
-		cleanPayload := make(map[string]interface{})
-		for k, v := range item.Payload {
-			cleanPayload[k] = convertQdrantValue(v)
-		}
-		results = append(results, QdrantDataResponse{ID: idStr, Payload: cleanPayload})
+	for _, p := range scrollResp.Result.Points {
+		idStr := fmt.Sprintf("%v", p.ID)
+		results = append(results, QdrantDataResponse{
+			ID:      idStr,
+			Payload: p.Payload,
+		})
 	}
 	return results, nil
 }
