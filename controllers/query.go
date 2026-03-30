@@ -20,7 +20,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	clientIP := r.RemoteAddr
 	// CORS is handled by global middleware
 
-	normalizedPrompt, selectedModel, history, ok := parseAndValidateRequest(w, r)
+	normalizedPrompt, selectedModel, ok := parseAndValidateRequest(w, r)
 	if !ok {
 		return
 	}
@@ -38,36 +38,47 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima Prompt (Normalized): %s | Model: %s", normalizedPrompt, selectedModel)
 
-	// --- CONTEXT RESOLUTION (CONTINUOUS CHAT) ---
-	resolvedPrompt := normalizedPrompt
-	if len(history) > 0 {
-		var err error
-		resolvedPrompt, err = ai.ResolveContext(r.Context(), normalizedPrompt, history)
-		if err != nil {
-			log.Printf("Warning: Failed to resolve context, using original prompt. Error: %v", err)
-		} else if resolvedPrompt != normalizedPrompt {
-			log.Printf("CONTEXT REWRITTEN: '%s' -> '%s'", normalizedPrompt, resolvedPrompt)
+	// --- EARLY CACHE CHECK (CONTINUOUS CHAT FIX) ---
+	var aiResp *models.AISqlResponse
+	promptVector, vectorErr := ai.GenerateEmbedding(normalizedPrompt)
+	if vectorErr == nil {
+		hardHit, _, checkErr := ai.CheckSemanticCache(r.Context(), promptVector)
+		if checkErr == nil && hardHit != nil {
+			log.Printf("⚡ EARLY CACHE HIT (%s): Langsung menggunakan query cache", normalizedPrompt)
+			aiResp = hardHit
+			aiResp.PromptAsli = normalizedPrompt
+			aiResp.Vector = promptVector
+			aiResp.IsCached = true
 		}
+	} else {
+		log.Printf("Warning: Gagal generate embedding awal: %v", vectorErr)
 	}
-	// ---------------------------------------------
+	// -----------------------------------------------
 
-	if handleAbsurdityCheck(r.Context(), w, resolvedPrompt) {
-		return
-	}
+	// Jika belum ada di cache (Cache Miss)
+	if aiResp == nil {
+		if handleAbsurdityCheck(r.Context(), w, normalizedPrompt) {
+			return
+		}
 
-	if err := utils.ValidateSafePrompt(resolvedPrompt); err != nil {
-		detectedIntent = constants.IntentAttack
-		finalStatus = "BLOCKED"
-		finalError = err
-		log.Printf("SECURITY BLOCK: %v", err)
-		utils.SendError(w, http.StatusForbidden, constants.ErrCodeDangerousIntent, err.Error())
-		return
-	}
+		if err := utils.ValidateSafePrompt(normalizedPrompt); err != nil {
+			detectedIntent = constants.IntentAttack
+			finalStatus = "BLOCKED"
+			finalError = err
+			log.Printf("SECURITY BLOCK: %v", err)
+			utils.SendError(w, http.StatusForbidden, constants.ErrCodeDangerousIntent, err.Error())
+			return
+		}
 
-	aiResp, err := ai.GetSQLWithModel(resolvedPrompt, selectedModel)
-	if err != nil {
-		handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
-		return
+		resp, err := ai.GetSQLWithModel(normalizedPrompt, selectedModel)
+		if err != nil {
+			handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
+			return
+		}
+
+		// If prompt was rewritten, save original prompt so it can be cached accurately later
+		resp.PromptAsli = normalizedPrompt
+		aiResp = &resp
 	}
 
 	if aiResp.IsAmbiguous {
@@ -87,7 +98,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
-	data, fixedSQL, execErr := executeWithRetry(aiResp)
+	data, fixedSQL, execErr := executeWithRetry(*aiResp)
 	if execErr != nil {
 		finalStatus = "DB_ERROR"
 		finalError = execErr
@@ -146,26 +157,26 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, string, []models.ChatMessage, bool) {
+func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	if r.Method != http.MethodPost {
 		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
-		return "", "", nil, false
+		return "", "", false
 	}
 	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidJSON, "Format JSON tidak valid")
-		return "", "", nil, false
+		return "", "", false
 	}
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeEmptyPrompt, "Prompt tidak boleh kosong")
-		return "", "", nil, false
+		return "", "", false
 	}
 
 	if err := utils.ValidatePromptSanity(normalizedPrompt); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, err.Error())
-		return "", "", nil, false
+		return "", "", false
 	}
 
 	// Default model if not specified
@@ -188,10 +199,10 @@ func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, st
 		// Let's stick to the request: "bisa disesuaikan dengan pilihan 3 model berikut"
 		// If it's not one of them, we return error.
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidPrompt, "Model AI tidak valid. Pilih antara: "+constants.ModelQwen32B+", "+constants.ModelGPTOss120B+", "+constants.ModelGPTOss20B)
-		return "", "", nil, false
+		return "", "", false
 	}
 
-	return normalizedPrompt, selectedModel, req.History, true
+	return normalizedPrompt, selectedModel, true
 }
 
 func handleAbsurdityCheck(ctx context.Context, w http.ResponseWriter, prompt string) bool {

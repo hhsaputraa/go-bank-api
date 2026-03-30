@@ -8,14 +8,8 @@ type QueryRequest struct {
 }
 
 type PromptRequest struct {
-	Prompt  string        `json:"prompt"`
-	Model   string        `json:"model,omitempty"`
-	History []ChatMessage `json:"history,omitempty"`
-}
-
-type ChatMessage struct {
-	Role    string `json:"role"`    // "user" or "model"
-	Content string `json:"content"` // Text content
+	Prompt  string `json:"prompt"`
+	Model   string `json:"model,omitempty"`
 }
 
 type FeedbackRequest struct {
