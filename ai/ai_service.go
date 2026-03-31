@@ -596,7 +596,7 @@ Berikut adalah hasil sampel tabel (maksimal 15 baris pertama JSON):
 
 Tugas Utama Anda:
 1. Berikan rangkuman analisis (insight) singkat yang langsung menjawab pertanyaan user atau menyorot data signifikan.
-2. Temukan pola unik, nilai tertinggi/terendah, atau anomali jika relevan.
+2. Temukan pola unik, nilai tertinggi/terendah, atau anomali jika relevan.jika tidak ada maka jangan dimunculkan
 3. HARAM MENJELASKAN ULANG STRUKTUR JSON/KOLOM secara teknis. Langsung sampaikan temuan dan narasi bisnisnya.
 4. Gunakan gaya bahasa Indonesia yang natural, profesional, dan ringkas (maks 3 paragraf pendek).`, promptAsli, dataStr)
 
@@ -613,3 +613,73 @@ Tugas Utama Anda:
 	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
 }
 
+// func GenerateInsightStream(ctx context.Context, promptAsli string, tableData QueryResult, modelName string, chunkChan chan<- string, errChan chan<- error) {
+// 	// 1. SANITASI DATA (Keamanan Lapisan Pertama)
+// 	// Filter kolom yang dikirim ke AI agar data sensitif tidak pernah keluar dari server
+// 	safeColumns := []string{}
+// 	sensitiveKeywords := []string{"id_nasabah", "cif", "nik", "password", "pin", "token", "no_hp"}
+
+// 	for _, col := range tableData.Columns {
+// 		isSensitive := false
+// 		lowerCol := strings.ToLower(col)
+// 		for _, kw := range sensitiveKeywords {
+// 			if strings.Contains(lowerCol, kw) {
+// 				isSensitive = true
+// 				break
+// 			}
+// 		}
+// 		if !isSensitive {
+// 			safeColumns = append(safeColumns, col)
+// 		}
+// 	}
+
+// 	// Batasi baris data maksimal 15 agar hemat token dan memori context
+// 	maxRows := 15
+// 	limitedRows := tableData.Rows
+// 	if len(limitedRows) > maxRows {
+// 		limitedRows = limitedRows[:maxRows]
+// 	}
+
+// 	// Buat map baru hanya dengan kolom yang aman
+// 	sanitizedRows := make([]map[string]interface{}, 0)
+// 	for _, row := range limitedRows {
+// 		safeRow := make(map[string]interface{})
+// 		for _, col := range safeColumns {
+// 			safeRow[col] = row[col]
+// 		}
+// 		sanitizedRows = append(sanitizedRows, safeRow)
+// 	}
+
+// 	compactData := map[string]interface{}{
+// 		"columns": safeColumns,
+// 		"rows":    sanitizedRows,
+// 	}
+
+// 	dataBytes, _ := json.Marshal(compactData)
+// 	dataStr := string(dataBytes)
+
+// 	// 2. PROMPT YANG LEBIH KETAT DAN SPESIFIK
+// 	systemPrompt := fmt.Sprintf(`Anda adalah data analis perbankan yang bertugas memberikan ringkasan eksekutif dari hasil kueri database.
+// Pertanyaan User: "%s"
+// Sampel Data (JSON):
+// %s
+
+// ATURAN KETAT (WAJIB DIIKUTI):
+// 1. BERDASARKAN FAKTA SAJA: Dilarang keras menebak motif, penyebab, atau memberikan rekomendasi spekulatif di luar data yang ada. Jika saldo 0, cukup nyatakan saldo 0 tanpa berasumsi akun tersebut tidak aktif atau berisiko.
+// 2. PERLINDUNGAN PRIVASI: Jika harus menyebutkan nama orang, samarkan nama belakangnya (Contoh: Dewi A***). Jangan pernah menyebutkan ID, NIK, atau nomor rekening lengkap.
+// 3. FORMAT: Berikan maksimal 2 paragraf singkat. Jangan menjelaskan struktur JSON atau nama kolom secara teknis.
+// 4. FOKUS: Langsung berikan jawaban yang relevan dengan Pertanyaan User berdasarkan angka yang tersedia.`, promptAsli, dataStr)
+
+// 	// 3. PENYESUAIAN PARAMETER UNTUK PRESISI
+// 	opts := GroqOptions{
+// 		Temperature:     0.2, // Diturunkan drastis agar tidak halu/terlalu kreatif
+// 		TopP:            0.9,
+// 		ReasoningFormat: "hidden",
+// 	}
+
+// 	if modelName == "" {
+// 		modelName = config.AppConfig.GroqModel // pastikan mengambil dari config yang benar
+// 	}
+
+// 	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
+// }
