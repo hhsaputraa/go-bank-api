@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -27,6 +28,7 @@ type GroqRequest struct {
 	Temperature     float32       `json:"temperature"`
 	TopP            float32       `json:"top_p,omitempty"`
 	ReasoningFormat string        `json:"reasoning_format,omitempty"`
+	Stream          bool          `json:"stream,omitempty"`
 }
 
 type GroqResponse struct {
@@ -155,4 +157,84 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 	log.Printf("Token Usage: %d input, %d output", groqResp.Usage.PromptTokens, groqResp.Usage.CompletionTokens)
 
 	return result, nil
+}
+
+func CallGroqAPIStream(ctx context.Context, prompt string, model string, options GroqOptions, chunkChan chan<- string, errChan chan<- error) {
+	defer close(chunkChan)
+	defer close(errChan)
+
+	reqBody := GroqRequest{
+		Model:           model,
+		Messages:        []GroqMessage{{Role: "user", Content: prompt}},
+		Temperature:     options.Temperature,
+		TopP:            options.TopP,
+		ReasoningFormat: options.ReasoningFormat,
+		Stream:          true,
+	}
+
+	jsonBody, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		errChan <- err
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Timeout untuk streaming tidak bisa dipaksa secara global (karena butuh waktu selama durasi stream).
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		errChan <- fmt.Errorf("koneksi Groq gagal saat stream: %w", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBytes, _ := io.ReadAll(resp.Body)
+		errChan <- fmt.Errorf("Groq stream error %d: %s", resp.StatusCode, string(respBytes))
+		return
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		line = strings.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		if strings.HasPrefix(line, "data: ") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+			dataStr = strings.TrimSpace(dataStr)
+
+			if dataStr == "[DONE]" {
+				return
+			}
+
+			var streamResp struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+
+			if err := json.Unmarshal([]byte(dataStr), &streamResp); err != nil {
+				continue
+			}
+
+			if len(streamResp.Choices) > 0 {
+				content := streamResp.Choices[0].Delta.Content
+				if content != "" {
+					chunkChan <- content
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		errChan <- err
+	}
 }

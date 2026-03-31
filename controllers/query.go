@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -119,7 +120,54 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 		go ai.LearnFromCorrection(aiResp.PromptAsli, fixedSQL)
 	}
 
-	utils.SendSuccess(w, data)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// 1. Kirim payload tabel segera
+	tablePayload := map[string]any{"type": "data", "data": data}
+	tableBytes, _ := json.Marshal(tablePayload)
+	fmt.Fprintf(w, "data: %s\n\n", tableBytes)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// 2. Siapkan Stream Analytics AI
+	chunkChan := make(chan string)
+	errChan := make(chan error)
+
+	go ai.GenerateInsightStream(r.Context(), normalizedPrompt, data, selectedModel, chunkChan, errChan)
+
+	// 3. Render event listener loop
+	for {
+		select {
+		case chunk, ok := <-chunkChan:
+			if !ok {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
+			msgPayload := map[string]any{"type": "text", "content": chunk}
+			msgBytes, _ := json.Marshal(msgPayload)
+			fmt.Fprintf(w, "data: %s\n\n", msgBytes)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		case errVal := <-errChan:
+			if errVal != nil {
+				log.Printf("Error AI Insight Stream: %v", errVal)
+			}
+			fmt.Fprintf(w, "data: [DONE]\n\n")
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {

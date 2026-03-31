@@ -573,3 +573,43 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 	return result.Category, nil
 }
 
+func GenerateInsightStream(ctx context.Context, promptAsli string, tableData QueryResult, modelName string, chunkChan chan<- string, errChan chan<- error) {
+	// Batasi baris data maksimal 15 agar hemat token dan memori context
+	maxRows := 15
+	limitedRows := tableData.Rows
+	if len(limitedRows) > maxRows {
+		limitedRows = limitedRows[:maxRows]
+	}
+
+	compactData := map[string]interface{}{
+		"columns": tableData.Columns,
+		"rows":    limitedRows,
+	}
+
+	dataBytes, _ := json.Marshal(compactData)
+	dataStr := string(dataBytes)
+
+	systemPrompt := fmt.Sprintf(`Anda adalah asisten data analis senior yang bertugas memberikan Insight Database.
+Pertanyaan User: "%s" 
+Berikut adalah hasil sampel tabel (maksimal 15 baris pertama JSON):
+%s
+
+Tugas Utama Anda:
+1. Berikan rangkuman analisis (insight) singkat yang langsung menjawab pertanyaan user atau menyorot data signifikan.
+2. Temukan pola unik, nilai tertinggi/terendah, atau anomali jika relevan.
+3. HARAM MENJELASKAN ULANG STRUKTUR JSON/KOLOM secara teknis. Langsung sampaikan temuan dan narasi bisnisnya.
+4. Gunakan gaya bahasa Indonesia yang natural, profesional, dan ringkas (maks 3 paragraf pendek).`, promptAsli, dataStr)
+
+	opts := GroqOptions{
+		Temperature:     0.7,
+		TopP:            0.9,
+		ReasoningFormat: "hidden",
+	}
+
+	if modelName == "" {
+		modelName = config.AppConfig.GroqModel
+	}
+
+	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
+}
+
