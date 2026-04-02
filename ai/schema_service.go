@@ -106,81 +106,11 @@ func GetDynamicSchemaContext() ([]string, error) {
 }
 
 func GetDynamicReferenceData(ctx context.Context) (string, error) {
-	targetTables := map[string]string{
-		"master_status_rekening": "nama_status",
-		"master_jenis_rekening":  "nama_jenis",
-		"master_tipe_nasabah":    "nama_tipe",
-		"master_tipe_transaksi":  "nama_transaksi",
+	if GlobalCache != nil {
+		return GlobalCache.GetReferenceData(), nil
 	}
-
-	if database.DbInstance == nil {
-		return "", fmt.Errorf("koneksi database belum siap")
-	}
-
-	schema, err := getSchemaFromConnStr()
-	if err != nil {
-		return "", err
-	}
-
-	schema = strings.Trim(schema, ":")
-	schema = strings.TrimSpace(schema)
-
-	if err := helper.ValidateIdentifier(schema); err != nil {
-		log.Printf("SECURITY ALERT: Schema validation failed in GetDynamicReferenceData: %s", schema)
-		return "", err
-	}
-
-	var builder strings.Builder
-	builder.WriteString("== LIVE DATA REFERENSI (Isi Tabel Master Terbaru) ==\n")
-	builder.WriteString("Gunakan ID/Kode di bawah ini secara TEPAT jika user bertanya tentang kategori ini:\n\n")
-
-	const queryTemplate = "SELECT {ID}, {NAME} FROM {SCHEMA}.{TABLE} ORDER BY {ID} ASC"
-	for tableName, nameCol := range targetTables {
-		idCol := "id"
-		switch tableName {
-		case "master_status_rekening":
-			idCol = "id_status_rekening"
-		case "master_jenis_rekening":
-			idCol = "id_jenis_rekening"
-		case "master_tipe_nasabah":
-			idCol = "id_tipe_nasabah"
-		case "master_tipe_transaksi":
-			idCol = "id_tipe_transaksi"
-		}
-
-		query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
-		query = strings.Replace(query, "{TABLE}", tableName, 1)
-		query = strings.ReplaceAll(query, "{ID}", idCol)
-		query = strings.Replace(query, "{NAME}", nameCol, 1)
-
-		rows, err := database.DbInstance.QueryContext(ctx, query)
-		if err != nil {
-			log.Printf("Warning: Gagal ambil ref data untuk tabel %s: %v (Query: %s)", tableName, err, query)
-			continue
-		}
-
-		builder.WriteString(fmt.Sprintf("TABEL REFERENSI: '%s'\n", tableName))
-
-		counter := 0
-		for rows.Next() {
-			var id, nama string
-			if err := rows.Scan(&id, &nama); err != nil {
-				continue
-			}
-			builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
-			counter++
-		}
-		if err := rows.Close(); err != nil {
-			log.Printf("Warning: Gagal menutup cursor database untuk tabel %s: %v", tableName, err)
-		}
-
-		if counter == 0 {
-			builder.WriteString("(Tabel kosong)\n")
-		}
-		builder.WriteString("\n")
-	}
-
-	return builder.String(), nil
+	log.Println("Peringatan: GlobalCache nil, mengembalikan data referensi kosong.")
+	return "", nil
 }
 
 func GetDynamicSqlExamples() ([]models.SqlExample, error) {
@@ -284,39 +214,10 @@ type DictionaryItem struct {
 }
 
 func GetBusinessDictionary(ctx context.Context) (string, error) {
-	schema, err := getSchemaFromConnStr()
-	if err != nil {
-		return "", err
+	if GlobalCache != nil {
+		return GlobalCache.GetBusinessDict(), nil
 	}
-
-	if err := helper.ValidateIdentifier(schema); err != nil {
-		log.Printf("SECURITY ALERT: Schema validation failed in GetBusinessDictionary: %s", schema)
-		return "", err
-	}
-	const queryTemplate = "SELECT istilah, definisi_bisnis, logika_sql FROM {SCHEMA}.ai_dictionary"
-	query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
-
-	rows, err := database.DbInstance.QueryContext(ctx, query)
-	if err != nil {
-		log.Printf("Warning: Gagal ambil dictionary: %v", err)
-		return "", nil
-	}
-	defer rows.Close()
-
-	var builder strings.Builder
-	builder.WriteString("== KAMUS ISTILAH BISNIS (PRIORITAS TINGGI) ==\n")
-	builder.WriteString("Gunakan logika ini jika user menyebut kata kunci berikut:\n")
-
-	for rows.Next() {
-		var d DictionaryItem
-		if err := rows.Scan(&d.Istilah, &d.Definisi, &d.LogikaSQL); err != nil {
-			return "", err
-		}
-		line := fmt.Sprintf("- \"%s\" bermakna: %s. (SQL Logic Wajib: `%s`)\n", d.Istilah, d.Definisi, d.LogikaSQL)
-		builder.WriteString(line)
-	}
-
-	return builder.String(), nil
+	return "", nil
 }
 
 type AbsurdKeyword struct {
@@ -326,37 +227,18 @@ type AbsurdKeyword struct {
 }
 
 func IsAbsurdPrompt(ctx context.Context, prompt string) (bool, error) {
-	if database.DbInstance == nil {
-		return false, fmt.Errorf("koneksi database (DbInstance) belum siap")
+	if GlobalCache == nil {
+		return false, nil
 	}
-	schema, err := getSchemaFromConnStr()
-	if err != nil {
-		return false, fmt.Errorf("gagal mendapatkan schema: %w", err)
-	}
-	schema = strings.Trim(schema, ":")
-	schema = strings.TrimSpace(schema)
-
-	if err := helper.ValidateIdentifier(schema); err != nil {
-		log.Printf("SECURITY ALERT: Schema name validation failed: %s", schema)
-		return false, err
-	}
-
-	const queryTemplate = "SELECT COUNT (*)FROM {SCHEMA}.absurd_keywords WHERE is_active = 1 AND INSTR(:1, LOWER(keyword)) > 0 AND ROWNUM = 1"
-	query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
 
 	lowerPrompt := strings.ToLower(prompt)
+	words := GlobalCache.GetAbsurdKeywords()
 
-	var exists int
-
-	err = database.DbInstance.QueryRowContext(ctx, query, lowerPrompt).Scan(&exists)
-	if err != nil {
-		log.Printf("Error query absurd_keywords: %v (Query: %s)", err, query)
-		return false, err
-	}
-
-	if exists >= 1 {
-		log.Printf("⛔ Prompt terdeteksi absurd/OOT: '%s'", prompt)
-		return true, nil
+	for _, w := range words {
+		if strings.Contains(lowerPrompt, w) {
+			log.Printf("⛔ Prompt terdeteksi absurd/OOT berdasarkan cache memori: '%s' (mengandung: %s)", prompt, w)
+			return true, nil
+		}
 	}
 
 	return false, nil

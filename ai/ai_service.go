@@ -80,6 +80,9 @@ func InitVectorService() error {
 		log.Println("✅ Berhasil menginisialisasi LangChain Modularity Chain.")
 	}
 
+	// Initialize In-Memory Cache
+	InitMemoryCache()
+
 	return nil
 }
 
@@ -318,20 +321,26 @@ ATURAN:
 }
 
 func CheckSemanticCache(ctx context.Context, vector []float32) (*models.AISqlResponse, string, error) {
-	log.Println("Mencari di Semantic Cache Qdrant (REST)...")
-	searchReq := qdrantSearchReq{Vector: vector, Limit: config.AppConfig.CacheSearchLimit, WithPayload: true}
+	log.Println("Mencari di Semantic Cache Qdrant (gRPC)...")
 
-	cacheResponse, err := qdrantSearchPoints(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, searchReq)
+	var searchLimit uint64 = config.AppConfig.CacheSearchLimit
+	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
+		CollectionName: config.AppConfig.QdrantCacheCollection,
+		Query:          pb.NewQuery(vector...),
+		WithPayload:    pb.NewWithPayload(true),
+		Limit:          &searchLimit,
+	})
+
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("qdrant grpc error: %w", err)
 	}
 
-	if len(cacheResponse.Result) > 0 {
-		cachedPoint := cacheResponse.Result[0]
+	if len(searchResponse) > 0 {
+		cachedPoint := searchResponse[0]
 		topScore := cachedPoint.Score
 
-		cachedSql, _ := cachedPoint.Payload["sql_query"].(string)
-		cachedPrompt, _ := cachedPoint.Payload["prompt_asli"].(string)
+		cachedSql := cachedPoint.GetPayload()["sql_query"].GetStringValue()
+		cachedPrompt := cachedPoint.GetPayload()["prompt_asli"].GetStringValue()
 
 		if topScore >= config.AppConfig.CacheSimilarityThreshold {
 			log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f", topScore)
