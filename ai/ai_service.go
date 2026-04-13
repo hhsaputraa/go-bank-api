@@ -583,31 +583,52 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 }
 
 func GenerateInsightStream(ctx context.Context, promptAsli string, tableData QueryResult, modelName string, chunkChan chan<- string, errChan chan<- error) {
-	// Batasi baris data maksimal 15 agar hemat token dan memori context
-	maxRows := 15
-	limitedRows := tableData.Rows
-	if len(limitedRows) > maxRows {
-		limitedRows = limitedRows[:maxRows]
+	var sb strings.Builder
+
+	sb.WriteString("| ")
+	sb.WriteString(strings.Join(tableData.Columns, " | "))
+	sb.WriteString(" |\n|")
+	for range tableData.Columns {
+		sb.WriteString("---|")
+	}
+	sb.WriteString("\n")
+
+	// Isi Tabel
+	for _, row := range tableData.Rows {
+		sb.WriteString("| ")
+		for i, val := range row {
+			if i > 0 {
+				sb.WriteString(" | ")
+			}
+			valStr := strings.ReplaceAll(fmt.Sprintf("%v", val), "|", "")
+			valStr = strings.ReplaceAll(valStr, "\n", " ")
+			valStr = strings.TrimSpace(valStr)
+			if valStr == "" {
+				valStr = "-"
+			}
+			sb.WriteString(valStr)
+		}
+		sb.WriteString(" |\n")
+
+		if sb.Len() > 14000 {
+			break
+		}
 	}
 
-	compactData := map[string]interface{}{
-		"columns": tableData.Columns,
-		"rows":    limitedRows,
-	}
+	dataStr := sb.String()
 
-	dataBytes, _ := json.Marshal(compactData)
-	dataStr := string(dataBytes)
-
-	systemPrompt := fmt.Sprintf(`Anda adalah asisten data analis senior yang bertugas memberikan Insight Database.
+	systemPrompt := fmt.Sprintf(`Anda adalah asisten analis eksekutif tingkat tinggi.
 Pertanyaan User: "%s" 
-Berikut adalah hasil sampel tabel (maksimal 15 baris pertama JSON):
+Konteks Data (Tabel):
+
 %s
 
-Tugas Utama Anda:
-1. Berikan rangkuman analisis (insight) singkat yang langsung menjawab pertanyaan user atau menyorot data signifikan.
-2. Temukan pola unik, nilai tertinggi/terendah, atau anomali jika relevan.jika tidak ada maka jangan dimunculkan
-3. HARAM MENJELASKAN ULANG STRUKTUR JSON/KOLOM secara teknis. Langsung sampaikan temuan dan narasi bisnisnya.
-4. Gunakan gaya bahasa Indonesia yang natural, profesional, dan ringkas (maks 3 paragraf pendek).`, promptAsli, dataStr)
+Tugas & Aturan EKSTREM:
+1. AKURASI MUTLAK 100%: Anda HANYA boleh berbicara berdasarkan angka pasti yang ada di dalam tabel. BACA TABEL SAMPAI BARIS PALING BAWAH. Jangan pernah berhalusinasi, menebak, atau mencoba menjumlahkan manual angka-angka tersebut.
+2. GAYA BERCERITA (STORYTELLING TINGKAT TINGGI): Sampaikan hasil analisis ini seolah-olah Anda sedang "konsultan bisnis" dan mempresentasikan narasi bisnis yang elegan, hidup, memikat, namun sangat informatif bagi pimpinan bank pusat. Jangan terdengar seperti robot kalkulator.
+3. HARAM MENGUCAPKAN ISTILAH TEKNIS: Pantang menggunakan kata-kata seperti: "tabel", "baris", "kolom", "dataset", "sel", "JSON", "markdown", "query", atau "diagregasi".
+4. ILUSI VISUAL: Jangan pernah menyiratkan atau membocorkan bahwa Anda sedang mengamati tabel/data mentah dari sistem. Ubah kalimat kaku seperti "dari kolom TOTAL_SEMUA..." menjadi tutur lisan yang bermakna seperti "Tercatat total keseluruhan penerimaan mencapai...".
+5. STRUKTUR NARASI BISNIS: (1) Awali dengan sorotan angka Paling Utama/Keseluruhan. (2) Ceritakan dinamikanya (tren, bulan tertinggi/terendah, atau pola mengejutkan yang valid). (3) Tutup dengan satu opini "Tindakan Lanjut" eksekutif yang masuk akal. Buat maksimal 2-3 paragraf.`, promptAsli, dataStr)
 
 	opts := GroqOptions{
 		Temperature:     0.7,
@@ -615,9 +636,8 @@ Tugas Utama Anda:
 		ReasoningFormat: "hidden",
 	}
 
-	if modelName == "" {
-		modelName = config.AppConfig.GroqModel
-	}
+	// Menggunakan model yang lebih pintar dan robust untuk membaca insight kompleks sesuai request user
+	modelName = "openai/gpt-oss-120b"
 
 	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
 }

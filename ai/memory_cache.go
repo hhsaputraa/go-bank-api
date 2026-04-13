@@ -98,6 +98,8 @@ func buildReferenceData(ctx context.Context) (string, error) {
 		"master_jenis_rekening":  "nama_jenis",
 		"master_tipe_nasabah":    "nama_tipe",
 		"master_tipe_transaksi":  "nama_transaksi",
+		"master_pinjaman":        "jenis_pinjaman",
+		"master_kd_kntr":         "nama_kantor",
 	}
 
 	var builder strings.Builder
@@ -116,6 +118,10 @@ func buildReferenceData(ctx context.Context) (string, error) {
 			idCol = "id_tipe_nasabah"
 		case "master_tipe_transaksi":
 			idCol = "id_tipe_transaksi"
+		case "master_pinjaman":
+			idCol = "id_pinjaman"
+		case "master_kd_kntr":
+			idCol = "id_kantor"
 		}
 
 		query := strings.Replace(queryTemplate, "{SCHEMA}", schema, 1)
