@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -22,7 +23,9 @@ type SQLChainService struct {
 // NewSQLChainService creates a new instance of SQLChainService
 func NewSQLChainService() (*SQLChainService, error) {
 	if config.AppConfig == nil {
-		return nil, fmt.Errorf("configuration not loaded")
+		err := fmt.Errorf("configuration not loaded")
+		log.Println("[ai][chain_service][NewSQLChainService] error:", err)
+		return nil, err
 	}
 
 	// Trim the suffix if it exists, as langchaingo appends it
@@ -37,6 +40,7 @@ func NewSQLChainService() (*SQLChainService, error) {
 		openai.WithModel(config.AppConfig.GroqModel),
 	)
 	if err != nil {
+		log.Println("[ai][chain_service][NewSQLChainService] error:", err)
 		return nil, fmt.Errorf("failed to initialize LLM: %w", err)
 	}
 
@@ -84,12 +88,15 @@ Pertanyaan Pengguna: "{{.userPrompt}}"
 	// Run the chain
 	prediction, err := chains.Call(ctx, chain, contextData)
 	if err != nil {
+		log.Println("[ai][chain_service][GenerateSQL] error:", err)
 		return "", fmt.Errorf("chain execution failed: %w", err)
 	}
 
 	output, ok := prediction["text"].(string)
 	if !ok {
-		return "", fmt.Errorf("unexpected output format from chain")
+		err := fmt.Errorf("unexpected output format from chain")
+		log.Println("[ai][chain_service][GenerateSQL] error:", err)
+		return "", err
 	}
 
 	return output, nil
@@ -129,6 +136,7 @@ func GetSQLWithChain(ctx context.Context, userPrompt string, contextData map[str
 	// Initialize service
 	service, err := NewSQLChainService()
 	if err != nil {
+		log.Println("[ai][chain_service][GetSQLWithChain] error:", err)
 		return "", err
 	}
 

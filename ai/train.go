@@ -17,11 +17,13 @@ func MainTrain() {
 	log.Println("Memulai proses Training Pengetahuan")
 
 	if err := godotenv.Load(); err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("⚠️Error memuat .env: %v", err)
 	}
 
 	_, err := config.LoadConfig()
 	if err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("⚠️Error memuat konfigurasi: %v", err)
 	}
 	log.Println("✅ Konfigurasi berhasil dimuat")
@@ -30,12 +32,14 @@ func MainTrain() {
 
 	// Connect to database
 	if err := database.ConnectDB(); err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("⚠️Gagal koneksi ke DB Postgres: %v", err)
 	}
 	log.Println("Koneksi DB Postgres untuk baca skema... OK.")
 
 	log.Printf("agar bersih...", config.AppConfig.QdrantCollectionName)
 	if err := qdrantDeleteCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName); err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)
 	}
 	time.Sleep(3 * time.Second)
@@ -45,6 +49,7 @@ func MainTrain() {
 	log.Printf("🆕 Membuat ulang koleksi '%s'...", config.AppConfig.QdrantCollectionName)
 	if err := qdrantCreateCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName,
 		config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("❌ Gagal membuat koleksi di Qdrant: %v", err)
 	}
 
@@ -52,11 +57,13 @@ func MainTrain() {
 
 	dynamicDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("Gagal mengambil DDL dinamis: %v", err)
 	}
 
 	dynamicSQLExamples, err := GetDynamicSqlExamples()
 	if err != nil {
+		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("Gagal mengambil contoh SQL dinamis: %v", err)
 	}
 
@@ -67,6 +74,7 @@ func MainTrain() {
 	for i, content := range dynamicDDLs {
 		vector, err := GenerateEmbedding(content)
 		if err != nil {
+			log.Println("[ai][train][MainTrain] error:", err)
 			log.Printf("Skip DDL #%d: %v", i, err)
 			continue
 		}
@@ -92,6 +100,7 @@ func MainTrain() {
 
 		vector, err := GenerateEmbedding(cleanPrompt)
 		if err != nil {
+			log.Println("[ai][train][MainTrain] error:", err)
 			log.Printf("Skip SQL #%d: %v", i, err)
 			continue
 		}
@@ -113,6 +122,7 @@ func MainTrain() {
 		log.Println("Tidak ada point untuk di-upsert (semua gagal embed?).")
 	} else {
 		if err := qdrantUpsertPoints(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName, points); err != nil {
+			log.Println("[ai][train][MainTrain] error:", err)
 			log.Fatalf("Gagal menyimpan vektor ke Qdrant: %v", err)
 		}
 	}

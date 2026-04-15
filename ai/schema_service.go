@@ -16,7 +16,9 @@ import (
 func getSchemaFromConnStr() (string, error) {
 	connStr := os.Getenv("DB_CONN_STRING")
 	if connStr == "" {
-		return "", fmt.Errorf("DB_CONN_STRING tidak ditemukan di .env")
+		err := fmt.Errorf("DB_CONN_STRING tidak ditemukan di .env")
+		log.Println("[ai][schema_service][getSchemaFromConnStr] error:", err)
+		return "", err
 	}
 
 	cleanConnStr := connStr
@@ -26,12 +28,15 @@ func getSchemaFromConnStr() (string, error) {
 
 	u, err := url.Parse(cleanConnStr)
 	if err != nil {
+		log.Println("[ai][schema_service][getSchemaFromConnStr] error:", err)
 		return "", fmt.Errorf("gagal parsing connection string: %w", err)
 	}
 
 	username := u.User.Username()
 	if username == "" {
-		return "", fmt.Errorf("username/schema tidak ditemukan dalam connection string")
+		err := fmt.Errorf("username/schema tidak ditemukan dalam connection string")
+		log.Println("[ai][schema_service][getSchemaFromConnStr] error:", err)
+		return "", err
 	}
 
 	return strings.ToUpper(username), nil
@@ -42,6 +47,7 @@ func GetDynamicSchemaContext() ([]string, error) {
 
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][schema_service][GetDynamicSchemaContext] error:", err)
 		return nil, err
 	}
 	schema = strings.Trim(schema, ":")
@@ -62,11 +68,14 @@ func GetDynamicSchemaContext() ([]string, error) {
 	 `
 
 	if database.DbInstance == nil {
-		return nil, fmt.Errorf("koneksi database (DbInstance) belum siap")
+		err := fmt.Errorf("koneksi database (DbInstance) belum siap")
+		log.Println("[ai][schema_service][GetDynamicSchemaContext] error:", err)
+		return nil, err
 	}
 
 	rows, err := database.DbInstance.QueryContext(context.Background(), query, schema)
 	if err != nil {
+		log.Println("[ai][schema_service][GetDynamicSchemaContext] error:", err)
 		return nil, fmt.Errorf("gagal query information_schema: %w", err)
 	}
 	defer rows.Close()
@@ -78,6 +87,7 @@ func GetDynamicSchemaContext() ([]string, error) {
 	for rows.Next() {
 		var tableName, columnName, dataType string
 		if err := rows.Scan(&tableName, &columnName, &dataType); err != nil {
+			log.Println("[ai][schema_service][GetDynamicSchemaContext] error:", err)
 			return nil, err
 		}
 
@@ -98,7 +108,9 @@ func GetDynamicSchemaContext() ([]string, error) {
 	}
 
 	if len(contexts) == 0 {
-		return nil, fmt.Errorf("tidak ada tabel ditemukan di skema '%s'", schema)
+		err := fmt.Errorf("tidak ada tabel ditemukan di skema '%s'", schema)
+		log.Println("[ai][schema_service][GetDynamicSchemaContext] error:", err)
+		return nil, err
 	}
 
 	log.Printf("✅ Berhasil! Mengambil %d potongan DDL dinamis.", len(contexts))
@@ -116,11 +128,14 @@ func GetDynamicReferenceData(ctx context.Context) (string, error) {
 func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 	log.Println("Mulai mengambil contoh SQL dinamis dari tabel 'rag_sql_example'...")
 	if database.DbInstance == nil {
-		return nil, fmt.Errorf("koneksi database (Dbinstance) belum siap")
+		err := fmt.Errorf("koneksi database (Dbinstance) belum siap")
+		log.Println("[ai][schema_service][GetDynamicSqlExamples] error:", err)
+		return nil, err
 	}
 
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][schema_service][GetDynamicSqlExamples] error:", err)
 		return nil, fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
 	}
 
@@ -141,6 +156,7 @@ func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 
 	rows, err := database.DbInstance.QueryContext(context.Background(), query)
 	if err != nil {
+		log.Println("[ai][schema_service][GetDynamicSqlExamples] error:", err)
 		log.Printf("Query Gagal: %s", query)
 		return nil, fmt.Errorf("gagal query tabel rag_sql_examples : %w", err)
 	}
@@ -151,6 +167,7 @@ func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 	for rows.Next() {
 		var promptExample, sqlExample string
 		if err := rows.Scan(&promptExample, &sqlExample); err != nil {
+			log.Println("[ai][schema_service][GetDynamicSqlExamples] error:", err)
 			return nil, err
 		}
 
@@ -171,16 +188,20 @@ func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 
 func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 	if database.DbInstance == nil {
-		return fmt.Errorf("koneksi database (DbInstance) belum siap")
+		err := fmt.Errorf("koneksi database (DbInstance) belum siap")
+		log.Println("[ai][schema_service][AddSqlExample] error:", err)
+		return err
 	}
 
 	// Get schema name dynamically from connection string
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][schema_service][AddSqlExample] error:", err)
 		return fmt.Errorf("gagal mendapatkan schema dari connection string: %w", err)
 	}
 
 	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Println("[ai][schema_service][AddSqlExample] error:", err)
 		log.Printf("SECURITY ALERT: Schema validation failed in AddSqlExample: %s", schema)
 		return err
 	}
@@ -200,6 +221,7 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 
 	_, err = database.DbInstance.ExecContext(ctx, query, promptExample, sqlKoreksi)
 	if err != nil {
+		log.Println("[ai][schema_service][AddSqlExample] error:", err)
 		return fmt.Errorf("gagal insert contekan baru ke DB: %w", err)
 	}
 

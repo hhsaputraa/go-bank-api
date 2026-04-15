@@ -22,7 +22,9 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	checkQuery = strings.TrimSpace(checkQuery)
 
 	if !strings.HasPrefix(checkQuery, "SELECT") && !strings.HasPrefix(checkQuery, "WITH") {
-		return result, fmt.Errorf("KEAMANAN: Hanya query SELECT yang diizinkan. Query Anda: %s", query)
+		err := fmt.Errorf("KEAMANAN: Hanya query SELECT yang diizinkan. Query Anda: %s", query)
+		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
+		return result, err
 	}
 
 	query = strings.TrimSpace(query)
@@ -38,7 +40,9 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 
 	for _, word := range forbidden {
 		if strings.Contains(checkQuery, word) {
-			return result, fmt.Errorf("KEAMANAN: Ditemukan kata kunci terlarang '%s'", word)
+			err := fmt.Errorf("KEAMANAN: Ditemukan kata kunci terlarang '%s'", word)
+			log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
+			return result, err
 		}
 	}
 
@@ -52,12 +56,14 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 
 	tx, err := database.DbInstance.BeginTx(ctx, nil)
 	if err != nil {
+		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		return result, fmt.Errorf("gagal memulai transaksi database: %w", err)
 	}
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, query, params...)
 	if err != nil {
+		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		log.Printf("Error eksekusi query SQL: %v. Query: %s", err, query)
 		return result, fmt.Errorf("gagal mengeksekusi query SQL (Pastikan syntax Oracle 10g valid)")
 	}
@@ -65,6 +71,7 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 
 	columns, err := rows.Columns()
 	if err != nil {
+		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		return result, fmt.Errorf("gagal membaca kolom: %w", err)
 	}
 	result.Columns = columns
@@ -79,6 +86,7 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 		}
 
 		if err := rows.Scan(rowScanners...); err != nil {
+			log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 			return result, fmt.Errorf("gagal scanning baris data: %w", err)
 		}
 
@@ -92,6 +100,7 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	}
 
 	if err = rows.Err(); err != nil {
+		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		return result, fmt.Errorf("error saat iterasi baris: %w", err)
 	}
 

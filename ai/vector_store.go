@@ -78,12 +78,16 @@ func qdrantSearchPoints(ctx context.Context, baseURL, name string, req qdrantSea
 	var data qdrantSearchResp
 	resp, body, err := httpDoJSON(ctx, "POST", url, req)
 	if err != nil {
+		log.Println("[ai][vector_store][qdrantSearchPoints] error:", err)
 		return data, err
 	}
 	if resp.StatusCode != 200 {
-		return data, fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+		log.Println("[ai][vector_store][qdrantSearchPoints] error:", err)
+		return data, err
 	}
 	if err := json.Unmarshal(body, &data); err != nil {
+		log.Println("[ai][vector_store][qdrantSearchPoints] error:", err)
 		return data, fmt.Errorf("gagal unmarshal response dari qdrant: %w", err)
 	}
 
@@ -116,7 +120,9 @@ func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int,
 	if (resp.StatusCode == 400 || resp.StatusCode == 409) && strings.Contains(string(body), "already exists") {
 		return nil
 	}
-	return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+	err = fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+	log.Println("[ai][vector_store][qdrantCreateCollection] error:", err)
+	return err
 }
 
 func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fieldName, schemaType string) error {
@@ -129,7 +135,9 @@ func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fiel
 	if resp.StatusCode == 200 {
 		return nil
 	}
-	return fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+	err = fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
+	log.Println("[ai][vector_store][qdrantCreatePayloadIndex] error:", err)
+	return err
 }
 
 func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
@@ -168,10 +176,13 @@ func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataRespon
 
 	resp, body, err := httpDoJSON(context.Background(), "POST", url, req)
 	if err != nil {
+		log.Println("[ai][vector_store][GetAllQdrantPoints] error:", err)
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("qdrant scroll error %d: %s", resp.StatusCode, string(body))
+		err := fmt.Errorf("qdrant scroll error %d: %s", resp.StatusCode, string(body))
+		log.Println("[ai][vector_store][GetAllQdrantPoints] error:", err)
+		return nil, err
 	}
 
 	var scrollResp struct {
@@ -184,6 +195,7 @@ func GetAllQdrantPoints(collectionName string, limit uint32) ([]QdrantDataRespon
 	}
 
 	if err := json.Unmarshal(body, &scrollResp); err != nil {
+		log.Println("[ai][vector_store][GetAllQdrantPoints] error:", err)
 		return nil, fmt.Errorf("gagal unmarshal scroll response: %w", err)
 	}
 
@@ -226,7 +238,9 @@ func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
 		return nil
 	}
 
-	return fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
+	err = fmt.Errorf("gagal hapus collection status %d: %s", resp.StatusCode, string(body))
+	log.Println("[ai][vector_store][qdrantDeleteCollection] error:", err)
+	return err
 }
 
 func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {

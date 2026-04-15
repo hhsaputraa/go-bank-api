@@ -28,6 +28,7 @@ func InitMemoryCache() {
 
 	log.Println("Memuat data statis ke dalam In-Memory Cache...")
 	if err := GlobalCache.LoadAllCacheFromDB(); err != nil {
+		log.Println("[ai][memory_cache][InitMemoryCache] error:", err)
 		log.Printf("Peringatan: Gagal memuat cache saat startup: %v", err)
 	} else {
 		log.Println("✅ Data referensi statis & filter berhasil dimuat ke cache!")
@@ -38,6 +39,7 @@ func InitMemoryCache() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := GlobalCache.LoadAllCacheFromDB(); err != nil {
+				log.Println("[ai][memory_cache][InitMemoryCache] error:", err)
 				log.Printf("Peringatan: Gagal auto-refresh in-memory cache: %v", err)
 			}
 		}
@@ -50,16 +52,19 @@ func (c *MemoryCache) LoadAllCacheFromDB() error {
 
 	refData, errRef := buildReferenceData(ctx)
 	if errRef != nil {
+		log.Println("[ai][memory_cache][LoadAllCacheFromDB] error:", errRef)
 		log.Printf("Gagal load reference data ke cache: %v", errRef)
 	}
 
 	dictData, errDict := buildBusinessDictionary(ctx)
 	if errDict != nil {
+		log.Println("[ai][memory_cache][LoadAllCacheFromDB] error:", errDict)
 		log.Printf("Gagal load business dictionary ke cache: %v", errDict)
 	}
 
 	absurdData, errAbsurd := buildAbsurdKeywords(ctx)
 	if errAbsurd != nil {
+		log.Println("[ai][memory_cache][LoadAllCacheFromDB] error:", errAbsurd)
 		log.Printf("Gagal load absurd keywords ke cache: %v", errAbsurd)
 	}
 
@@ -80,16 +85,20 @@ func (c *MemoryCache) LoadAllCacheFromDB() error {
 
 func buildReferenceData(ctx context.Context) (string, error) {
 	if database.DbInstance == nil {
-		return "", fmt.Errorf("koneksi database belum siap")
+		err := fmt.Errorf("koneksi database belum siap")
+		log.Println("[ai][memory_cache][buildReferenceData] error:", err)
+		return "", err
 	}
 
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][memory_cache][buildReferenceData] error:", err)
 		return "", err
 	}
 	schema = strings.Trim(strings.TrimSpace(schema), ":")
 
 	if err := helper.ValidateIdentifier(schema); err != nil {
+		log.Println("[ai][memory_cache][buildReferenceData] error:", err)
 		return "", err
 	}
 
@@ -131,6 +140,7 @@ func buildReferenceData(ctx context.Context) (string, error) {
 
 		rows, err := database.DbInstance.QueryContext(ctx, query)
 		if err != nil {
+			log.Println("[ai][memory_cache][buildReferenceData] error:", err)
 			log.Printf("Warning: Gagal ambil ref data untuk %s: %v", tableName, err)
 			continue
 		}
@@ -157,11 +167,14 @@ func buildReferenceData(ctx context.Context) (string, error) {
 
 func buildBusinessDictionary(ctx context.Context) (string, error) {
 	if database.DbInstance == nil {
-		return "", fmt.Errorf("koneksi database belum siap")
+		err := fmt.Errorf("koneksi database belum siap")
+		log.Println("[ai][memory_cache][buildBusinessDictionary] error:", err)
+		return "", err
 	}
 
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][memory_cache][buildBusinessDictionary] error:", err)
 		return "", err
 	}
 	schema = strings.Trim(strings.TrimSpace(schema), ":")
@@ -169,6 +182,7 @@ func buildBusinessDictionary(ctx context.Context) (string, error) {
 	query := fmt.Sprintf("SELECT istilah, definisi_bisnis, logika_sql FROM %s.ai_dictionary", schema)
 	rows, err := database.DbInstance.QueryContext(ctx, query)
 	if err != nil {
+		log.Println("[ai][memory_cache][buildBusinessDictionary] error:", err)
 		return "", err
 	}
 	defer rows.Close()
@@ -189,11 +203,14 @@ func buildBusinessDictionary(ctx context.Context) (string, error) {
 
 func buildAbsurdKeywords(ctx context.Context) ([]string, error) {
 	if database.DbInstance == nil {
-		return nil, fmt.Errorf("koneksi database belum siap")
+		err := fmt.Errorf("koneksi database belum siap")
+		log.Println("[ai][memory_cache][buildAbsurdKeywords] error:", err)
+		return nil, err
 	}
 
 	schema, err := getSchemaFromConnStr()
 	if err != nil {
+		log.Println("[ai][memory_cache][buildAbsurdKeywords] error:", err)
 		return nil, err
 	}
 	schema = strings.Trim(strings.TrimSpace(schema), ":")
@@ -201,6 +218,7 @@ func buildAbsurdKeywords(ctx context.Context) ([]string, error) {
 	query := fmt.Sprintf("SELECT keyword FROM %s.absurd_keywords WHERE is_active = 1", schema)
 	rows, err := database.DbInstance.QueryContext(ctx, query)
 	if err != nil {
+		log.Println("[ai][memory_cache][buildAbsurdKeywords] error:", err)
 		return nil, err
 	}
 	defer rows.Close()

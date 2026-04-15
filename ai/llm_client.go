@@ -50,10 +50,13 @@ type GroqOptions struct {
 
 func GenerateEmbedding(text string) ([]float32, error) {
 	if geminiEmbedder == nil {
-		return nil, fmt.Errorf("service embedding belum diinisialisasi")
+		err := fmt.Errorf("service embedding belum diinisialisasi")
+		log.Println("[ai][llm_client][GenerateEmbedding] error:", err)
+		return nil, err
 	}
 	res, err := geminiEmbedder.EmbedContent(context.Background(), genai.Text(text))
 	if err != nil {
+		log.Println("[ai][llm_client][GenerateEmbedding] error:", err)
 		return nil, err
 	}
 
@@ -124,6 +127,7 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 
 	req, err := http.NewRequest("POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		log.Println("[ai][llm_client][callGroqAPI] error:", err)
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
@@ -136,21 +140,27 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Println("[ai][llm_client][callGroqAPI] error:", err)
 		return "", fmt.Errorf("koneksi Groq gagal: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("Groq error %d: %s", resp.StatusCode, string(respBytes))
+		err := fmt.Errorf("Groq error %d: %s", resp.StatusCode, string(respBytes))
+		log.Println("[ai][llm_client][callGroqAPI] error:", err)
+		return "", err
 	}
 
 	var groqResp GroqResponse
 	if err := json.Unmarshal(respBytes, &groqResp); err != nil {
+		log.Println("[ai][llm_client][callGroqAPI] error:", err)
 		return "", err
 	}
 	if len(groqResp.Choices) == 0 {
-		return "", errors.New("Groq tidak merespon")
+		err := errors.New("Groq tidak merespon")
+		log.Println("[ai][llm_client][callGroqAPI] error:", err)
+		return "", err
 	}
 
 	result := groqResp.Choices[0].Message.Content
@@ -176,6 +186,7 @@ func CallGroqAPIStream(ctx context.Context, prompt string, model string, options
 
 	req, err := http.NewRequestWithContext(ctx, "POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		log.Println("[ai][llm_client][CallGroqAPIStream] error:", err)
 		errChan <- err
 		return
 	}
@@ -186,14 +197,18 @@ func CallGroqAPIStream(ctx context.Context, prompt string, model string, options
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		errChan <- fmt.Errorf("koneksi Groq gagal saat stream: %w", err)
+		err = fmt.Errorf("koneksi Groq gagal saat stream: %w", err)
+		log.Println("[ai][llm_client][CallGroqAPIStream] error:", err)
+		errChan <- err
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		respBytes, _ := io.ReadAll(resp.Body)
-		errChan <- fmt.Errorf("Groq stream error %d: %s", resp.StatusCode, string(respBytes))
+		err = fmt.Errorf("Groq stream error %d: %s", resp.StatusCode, string(respBytes))
+		log.Println("[ai][llm_client][CallGroqAPIStream] error:", err)
+		errChan <- err
 		return
 	}
 
@@ -235,6 +250,7 @@ func CallGroqAPIStream(ctx context.Context, prompt string, model string, options
 	}
 
 	if err := scanner.Err(); err != nil {
+		log.Println("[ai][llm_client][CallGroqAPIStream] error:", err)
 		errChan <- err
 	}
 }

@@ -59,11 +59,14 @@ func CheckPasswordHash(password, hash string) bool {
 
 func RegisterUser(req RegisterRequest) error {
 	if database.DbInstance == nil {
-		return errors.New("database belum terkoneksi")
+		err := errors.New("database belum terkoneksi")
+		log.Println("[auth][auth_service][RegisterUser] error:", err)
+		return err
 	}
 
 	hashedPwd, err := HashPassword(req.Password)
 	if err != nil {
+		log.Println("[auth][auth_service][RegisterUser] error:", err)
 		return err
 	}
 	query := `
@@ -78,6 +81,7 @@ func RegisterUser(req RegisterRequest) error {
 		req.Username, hashedPwd, req.FullName, req.Email,
 		constants.RegularUserRole, constants.ActiveUserStatus, constants.AccountStatusPendingSetup)
 	if err != nil {
+		log.Println("[auth][auth_service][RegisterUser] error:", err)
 		if strings.Contains(err.Error(), "ORA-00001") {
 			return errors.New("username sudah digunakan")
 		}
@@ -89,17 +93,23 @@ func RegisterUser(req RegisterRequest) error {
 func LoginUser(req LoginRequest) (string, int, error) {
 
 	if req.Username == "" {
+		err := errors.New("username tidak boleh kosong")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Println("[AUTH] Gagal: Username kosong")
-		return "", 0, errors.New("username tidak boleh kosong")
+		return "", 0, err
 	}
 
 	if req.Password == "" {
+		err := errors.New("password tidak boleh kosong")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Println("[AUTH] Gagal: Password kosong")
-		return "", 0, errors.New("password tidak boleh kosong")
+		return "", 0, err
 	}
 
 	if database.DbInstance == nil {
-		return "", 0, errors.New("database belum terkoneksi")
+		err := errors.New("database belum terkoneksi")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
+		return "", 0, err
 	}
 
 	log.Printf("[AUTH] Login: User='%s', IP='%s'", req.Username, req.IPAddress)
@@ -117,21 +127,28 @@ func LoginUser(req LoginRequest) (string, int, error) {
 	)
 
 	if err != nil {
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Printf("[AUTH] User not found or DB error: %v", err)
 		return "", 0, errors.New("username atau password salah")
 	}
 
 	if !CheckPasswordHash(req.Password, user.PasswordHash) {
+		err := errors.New("username atau password salah")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Printf("[AUTH] Wrong password for '%s'", req.Username)
-		return "", 0, errors.New("username atau password salah")
+		return "", 0, err
 	}
 
 	if isActive == constants.InactiveUserStatus {
-		return "", 0, errors.New("akun dinonaktifkan silahkan hubungi administrator")
+		err := errors.New("akun dinonaktifkan silahkan hubungi administrator")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
+		return "", 0, err
 	}
 
 	if accountStatus == constants.AccountStatusBlocked {
-		return "", 0, errors.New("akun anda diblokir. silahkan hubungi administrator")
+		err := errors.New("akun anda diblokir. silahkan hubungi administrator")
+		log.Println("[auth][auth_service][LoginUser] error:", err)
+		return "", 0, err
 	}
 
 	expTime := time.Now().Add(24 * time.Hour)
@@ -144,6 +161,7 @@ func LoginUser(req LoginRequest) (string, int, error) {
 
 	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		return "", 0, err
 	}
 
@@ -152,11 +170,13 @@ func LoginUser(req LoginRequest) (string, int, error) {
 
 	_, err = database.DbInstance.ExecContext(ctx, "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1", user.ID)
 	if err != nil {
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Printf("[AUTH] WARNING: Gagal update last_login: %v", err)
 	}
 
 	_, err = database.DbInstance.ExecContext(ctx, "DELETE FROM user_sessions WHERE id_app_users = :1 AND device_info = :2", user.ID, req.UserAgent)
 	if err != nil {
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Printf("[AUTH] Warning: Gagal Hapus sesi lama: %v", err)
 	}
 	_, err = database.DbInstance.ExecContext(ctx, `
@@ -165,6 +185,7 @@ func LoginUser(req LoginRequest) (string, int, error) {
 	`, user.ID, tokenString, req.UserAgent, req.IPAddress, expTime)
 
 	if err != nil {
+		log.Println("[auth][auth_service][LoginUser] error:", err)
 		log.Printf("[AUTH] Error Critical: Gagal simpan sesi: %v", err)
 		return "", 0, errors.New("gagal membuat sesi login")
 	}
@@ -175,10 +196,14 @@ func LoginUser(req LoginRequest) (string, int, error) {
 
 func ChangePassword(userID int64, oldPassword, newPassword string) error {
 	if database.DbInstance == nil {
-		return errors.New("database belum terkoneksi")
+		err := errors.New("database belum terkoneksi")
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
+		return err
 	}
 	if oldPassword == "" || newPassword == "" {
-		return errors.New("password lama dan baru wajib diisi")
+		err := errors.New("password lama dan baru wajib diisi")
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
+		return err
 	}
 
 	// 1. Ambil password lama dari DB
@@ -186,22 +211,28 @@ func ChangePassword(userID int64, oldPassword, newPassword string) error {
 	queryGet := "SELECT password_hash FROM app_users WHERE id_app_users = :1"
 	err := database.DbInstance.QueryRowContext(context.Background(), queryGet, userID).Scan(&currentHash)
 	if err != nil {
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
 		return fmt.Errorf("gagal mengambil data user: %w", err)
 	}
 
 	// 2. Verifikasi password lama
 	if !CheckPasswordHash(oldPassword, currentHash) {
-		return errors.New("password lama salah")
+		err := errors.New("password lama salah")
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
+		return err
 	}
 
 	// 3. Validasi password baru tidak boleh sama dengan lama
 	if oldPassword == newPassword {
-		return errors.New("password baru tidak boleh sama dengan password lama")
+		err := errors.New("password baru tidak boleh sama dengan password lama")
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
+		return err
 	}
 
 	// 4. Hash password baru
 	newHash, err := HashPassword(newPassword)
 	if err != nil {
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
 		return err
 	}
 
@@ -213,6 +244,7 @@ func ChangePassword(userID int64, oldPassword, newPassword string) error {
 	`
 	_, err = database.DbInstance.ExecContext(context.Background(), queryUpdate, newHash, constants.AccountStatusPerfect, userID)
 	if err != nil {
+		log.Println("[auth][auth_service][ChangePassword] error:", err)
 		return fmt.Errorf("gagal update password: %w", err)
 	}
 
@@ -250,18 +282,25 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("metode signing tidak valid")
+				err := fmt.Errorf("metode signing tidak valid")
+				log.Println("[auth][auth_service][AuthMiddleware] error:", err)
+				return nil, err
 			}
 			return []byte(config.AppConfig.JWTSecret), nil
 		})
 
 		if err != nil || !token.Valid {
+			if err != nil {
+				log.Println("[auth][auth_service][AuthMiddleware] error:", err)
+			}
 			utils.SendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token tidak valid")
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok || !token.Valid {
+			err := fmt.Errorf("token claims tidak valid")
+			log.Println("[auth][auth_service][AuthMiddleware] error:", err)
 			utils.SendError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Token claims tidak valid")
 			return
 		}
@@ -274,6 +313,7 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			err := database.DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
 
 			if err != nil {
+				log.Println("[auth][auth_service][AuthMiddleware] error:", err)
 				log.Printf("DB Session Error: %v", err)
 				utils.SendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
 				return
@@ -295,13 +335,18 @@ func LogoutUser(tokenString string) error {
 	}
 	query := "DELETE FROM user_sessions WHERE token = :1"
 	_, err := database.DbInstance.Exec(query, tokenString)
+	if err != nil {
+		log.Println("[auth][auth_service][LogoutUser] error:", err)
+	}
 	return err
 }
 
 // GenerateOTP generates a 6-digit OTP, sets password to defaultPassword, forces change password, and returns the OTP
 func GenerateOTP(username, defaultPassword string) (string, error) {
 	if database.DbInstance == nil {
-		return "", errors.New("database belum terkoneksi")
+		err := errors.New("database belum terkoneksi")
+		log.Println("[auth][auth_service][GenerateOTP] error:", err)
+		return "", err
 	}
 
 	// 1. Generate 6 digit Code
@@ -314,6 +359,7 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 	// 3. Hash Default Password
 	hashed, err := HashPassword(defaultPassword)
 	if err != nil {
+		log.Println("[auth][auth_service][GenerateOTP] error:", err)
 		return "", err
 	}
 
@@ -329,6 +375,7 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 		otpCode, expiry, hashed, constants.AccountStatusForgotPassword, username)
 
 	if err != nil {
+		log.Println("[auth][auth_service][GenerateOTP] error:", err)
 		return "", fmt.Errorf("gagal update OTP: %w", err)
 	}
 
@@ -343,7 +390,9 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 // LoginWithOTP validates OTP and logs the user in, returning token and account status
 func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, error) {
 	if database.DbInstance == nil {
-		return "", 0, errors.New("database belum terkoneksi")
+		err := errors.New("database belum terkoneksi")
+		log.Println("[auth][auth_service][LoginWithOTP] error:", err)
+		return "", 0, err
 	}
 
 	var user User
@@ -367,6 +416,7 @@ func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, erro
 	)
 
 	if err != nil {
+		log.Println("[auth][auth_service][LoginWithOTP] error:", err)
 		return "", 0, errors.New("user tidak ditemukan")
 	}
 
@@ -400,6 +450,7 @@ func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, erro
 	clearOTPQuery := "UPDATE app_users SET otp_code = NULL, otp_expired_at = NULL, last_login_at = CURRENT_TIMESTAMP WHERE id_app_users = :1"
 	_, err = database.DbInstance.ExecContext(context.Background(), clearOTPQuery, user.ID)
 	if err != nil {
+		log.Println("[auth][auth_service][LoginWithOTP] error:", err)
 		log.Printf("[AUTH] Warning: Gagal clear OTP user %s: %v", username, err)
 	}
 
@@ -414,6 +465,7 @@ func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, erro
 
 	tokenString, err := token.SignedString([]byte(config.AppConfig.JWTSecret))
 	if err != nil {
+		log.Println("[auth][auth_service][LoginWithOTP] error:", err)
 		return "", 0, err
 	}
 
@@ -425,6 +477,7 @@ func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, erro
 	`, user.ID, tokenString, userAgent, ipAddress, expTime)
 
 	if err != nil {
+		log.Println("[auth][auth_service][LoginWithOTP] error:", err)
 		return "", 0, errors.New("gagal membuat sesi")
 	}
 

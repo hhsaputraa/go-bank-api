@@ -34,13 +34,16 @@ type IntentResponse struct {
 
 func InitVectorService() error {
 	if config.AppConfig == nil {
-		return fmt.Errorf("konfigurasi aplikasi belum dimuat")
+		err := fmt.Errorf("konfigurasi aplikasi belum dimuat")
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
+		return err
 	}
 
 	ctx := context.Background()
 
 	geminiClient, err := genai.NewClient(ctx, option.WithAPIKey(config.AppConfig.GoogleAPIKey))
 	if err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		return fmt.Errorf("gagal membuat client Gemini: %w", err)
 	}
 	geminiEmbedder = geminiClient.EmbeddingModel(config.AppConfig.EmbeddingModel)
@@ -52,20 +55,24 @@ func InitVectorService() error {
 		UseTLS: true,
 	})
 	if err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		return fmt.Errorf("gagal membuat Qdrant gRPC client: %w", err)
 	}
 	qdrantClient = client
 
 	log.Printf("Memastikan collection cache '%s' ada via REST...", config.AppConfig.QdrantCacheCollection)
 	if err := qdrantCreateCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		return fmt.Errorf("gagal membuat/memverifikasi cache collection: %w", err)
 	}
 	if err := qdrantCreateCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName, config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		return fmt.Errorf("gagal membuat/memverifikasi RAG collection: %w", err)
 	}
 
 	log.Println("Memastikan index payload 'category' tersedia...")
 	if err := qdrantCreatePayloadIndex(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName, "category", "keyword"); err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		log.Printf("Warning: Gagal membuat index payload: %v", err)
 	}
 
@@ -74,6 +81,7 @@ func InitVectorService() error {
 	// Inisialisasi LangChain SQL Service
 	chainService, err := NewSQLChainService()
 	if err != nil {
+		log.Println("[ai][ai_service][InitVectorService] error:", err)
 		log.Printf("Warning: Gagal inisialisasi SQLChainService: %v", err)
 	} else {
 		sqlChainService = chainService
@@ -98,6 +106,7 @@ func LearnFromCorrection(prompt string, validSQL string) {
 
 		vector, err := GenerateEmbedding(p)
 		if err != nil {
+			log.Println("[ai][ai_service][LearnFromCorrection] error:", err)
 			log.Printf("Auto-Learning gagal (Embedding): %v", err)
 			return
 		}
@@ -122,6 +131,7 @@ func LearnFromCorrection(prompt string, validSQL string) {
 		})
 
 		if err != nil {
+			log.Println("[ai][ai_service][LearnFromCorrection] error:", err)
 			log.Printf("Auto-Learning Gagal (Qdrant Upsert): %v", err)
 		} else {
 			log.Printf("AUTO-LEARNING SUKSES: Pola baru tersimpan. ID: %s", pointID)
@@ -140,11 +150,14 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
 	}
 	if err := utils.ValidateSafePrompt(userPrompt); err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 		log.Printf("SECURITY BLOCK: User input Raw SQL: '%s'", userPrompt)
 		return models.AISqlResponse{}, &models.AppError{Code: "DANGEROUS_INTENT", Message: "DITOLAK. Silakan ganti pertanyaan Anda."}
 	}
 	if config.AppConfig == nil {
-		return models.AISqlResponse{}, fmt.Errorf("konfigurasi aplikasi belum dimuat")
+		err := fmt.Errorf("konfigurasi aplikasi belum dimuat")
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
+		return models.AISqlResponse{}, err
 	}
 
 	intent, _ := ClassifyIntent(userPrompt)
@@ -168,11 +181,13 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	promptVector, err := GenerateEmbedding(userPrompt)
 	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 		return models.AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
 	}
 
 	hardHit, softCacheContext, err := CheckSemanticCache(ctx, promptVector)
 	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 		log.Printf("PERINGATAN: Gagal akses cache: %v", err)
 	}
 	if hardHit != nil {
@@ -183,6 +198,7 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 	allDDLString, err := getDDLContext(ctx, promptVector)
 	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 		return models.AISqlResponse{}, err
 	}
 	refDataString, _ := GetDynamicReferenceData(ctx)
@@ -206,9 +222,11 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 		chainOutput, err := sqlChainService.GenerateSQL(ctx, userPrompt, contextData)
 		if err != nil {
+			log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 			log.Printf("⚠️ LangChain Error: %v. Fallback ke legacy implementation.", err)
 			rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
 			if err != nil {
+				log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 				return models.AISqlResponse{}, err
 			}
 			cleanContent = rawContent
@@ -219,6 +237,7 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		// Legacy Implementation
 		rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
 		if err != nil {
+			log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 			return models.AISqlResponse{}, err
 		}
 		cleanContent = rawContent
@@ -258,7 +277,9 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 func EnhanceNaturalLanguage(draft string) (string, error) {
 	if config.AppConfig.GroqAPIKey == "" {
-		return "", fmt.Errorf("API Key Groq belum diset")
+		err := fmt.Errorf("API Key Groq belum diset")
+		log.Println("[ai][ai_service][EnhanceNaturalLanguage] error:", err)
+		return "", err
 	}
 
 	systemPrompt := `
@@ -285,7 +306,9 @@ Output:`
 
 func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
 	if config.AppConfig == nil {
-		return "", fmt.Errorf("konfigurasi belum dimuat")
+		err := fmt.Errorf("konfigurasi belum dimuat")
+		log.Println("[ai][ai_service][RepairSQLFromAI] error:", err)
+		return "", err
 	}
 	log.Println("Memulai Self-Correction AI...")
 
@@ -307,6 +330,7 @@ ATURAN:
 	}
 	rawContent, err := callGroqAPI(systemPrompt, config.AppConfig.GroqModel, opts)
 	if err != nil {
+		log.Println("[ai][ai_service][RepairSQLFromAI] error:", err)
 		return "", err
 	}
 
@@ -332,6 +356,7 @@ func CheckSemanticCache(ctx context.Context, vector []float32) (*models.AISqlRes
 	})
 
 	if err != nil {
+		log.Println("[ai][ai_service][CheckSemanticCache] error:", err)
 		return nil, "", fmt.Errorf("qdrant grpc error: %w", err)
 	}
 
@@ -374,6 +399,9 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 	})
 
 	if err != nil || len(searchResponse) == 0 {
+		if err != nil {
+			log.Println("[ai][ai_service][getRAGContext] error:", err)
+		}
 		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
 	}
 
@@ -397,9 +425,13 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 func getDDLContext(ctx context.Context, vector []float32) (string, error) {
 	relevantDDL, err := searchRelevantDDL(ctx, vector)
 	if err != nil || strings.TrimSpace(relevantDDL) == "" {
+		if err != nil {
+			log.Println("[ai][ai_service][getDDLContext] error:", err)
+		}
 		log.Println("Fallback ke load SEMUA tabel.")
 		allDDLs, err := GetDynamicSchemaContext()
 		if err != nil {
+			log.Println("[ai][ai_service][getDDLContext] error:", err)
 			return "", fmt.Errorf("gagal mengambil DDL dinamis: %w", err)
 		}
 		return strings.Join(allDDLs, "\n---\n"), nil
@@ -521,6 +553,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 		},
 	})
 	if err != nil {
+		log.Println("[ai][ai_service][searchRelevantDDL] error:", err)
 		return "", err
 	}
 
@@ -566,6 +599,7 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 	}
 	rawResponse, err := callGroqAPI(finalPrompt, constants.GroqModelFast, opts)
 	if err != nil {
+		log.Println("[ai][ai_service][ClassifyIntent] error:", err)
 		return constants.IntentSQL, nil
 	}
 	var result IntentResponse
@@ -574,6 +608,7 @@ JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
 	cleanJSON = strings.ReplaceAll(cleanJSON, "```", "")
 
 	if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
+		log.Println("[ai][ai_service][ClassifyIntent] error:", err)
 		log.Printf("⚠️ Gagal parse intent JSON: %v. Raw: %s", err, rawResponse)
 		return constants.IntentSQL, nil
 	}
@@ -617,18 +652,73 @@ func GenerateInsightStream(ctx context.Context, promptAsli string, tableData Que
 
 	dataStr := sb.String()
 
-	systemPrompt := fmt.Sprintf(`Anda adalah asisten analis eksekutif tingkat tinggi.
-Pertanyaan User: "%s" 
-Konteks Data (Tabel):
+	systemPrompt := fmt.Sprintf(`Anda adalah analis keuangan senior di sebuah bank yang berbicara langsung kepada manajemen/eksekutif.
 
+=== PERTANYAAN ===
+"%s"
+
+=== DATA ===
 %s
 
-Tugas & Aturan EKSTREM:
-1. AKURASI MUTLAK 100%: Anda HANYA boleh berbicara berdasarkan angka pasti yang ada di dalam tabel. BACA TABEL SAMPAI BARIS PALING BAWAH. Jangan pernah berhalusinasi, menebak, atau mencoba menjumlahkan manual angka-angka tersebut.
-2. GAYA BERCERITA (STORYTELLING TINGKAT TINGGI): Sampaikan hasil analisis ini seolah-olah Anda sedang "konsultan bisnis" dan mempresentasikan narasi bisnis yang elegan, hidup, memikat, namun sangat informatif bagi pimpinan bank pusat. Jangan terdengar seperti robot kalkulator.
-3. HARAM MENGUCAPKAN ISTILAH TEKNIS: Pantang menggunakan kata-kata seperti: "tabel", "baris", "kolom", "dataset", "sel", "JSON", "markdown", "query", atau "diagregasi".
-4. ILUSI VISUAL: Jangan pernah menyiratkan atau membocorkan bahwa Anda sedang mengamati tabel/data mentah dari sistem. Ubah kalimat kaku seperti "dari kolom TOTAL_SEMUA..." menjadi tutur lisan yang bermakna seperti "Tercatat total keseluruhan penerimaan mencapai...".
-5. STRUKTUR NARASI BISNIS: (1) Awali dengan sorotan angka Paling Utama/Keseluruhan. (2) Ceritakan dinamikanya (tren, bulan tertinggi/terendah, atau pola mengejutkan yang valid). (3) Tutup dengan satu opini "Tindakan Lanjut" eksekutif yang masuk akal. Buat maksimal 2-3 paragraf.`, promptAsli, dataStr)
+=== INSTRUKSI UTAMA ===
+
+Sebelum menjawab, tentukan dulu karakter data yang Anda terima:
+
+── JIKA DATA BERISI DAFTAR / LIST (data nasabah, rekening, transaksi per entitas, dll):
+   • Sebutkan berapa total record/entitas yang ditemukan
+   • Sebutkan entitas-entitasnya secara natural (nama, ID, nilai)
+   • Highlight yang paling menonjol: nilai tertinggi, terendah, atau yang perlu perhatian
+   • Jika ada angka/saldo, bandingkan antar entitas
+   • JANGAN paksa membuat total/akumulasi jika data memang tidak mengandung itu
+
+── JIKA DATA BERISI ANGKA AGREGAT / SUMMARY (total, akumulasi, rata-rata, perbandingan):
+   • Sebutkan angka utama (grand total / keseluruhan) di awal
+   • Sebutkan kontributor terbesar & terkecil beserta persentasenya dari total
+   • Berikan perbandingan antar entitas jika ada (kantor, produk, periode)
+   • Tambahkan 1 kalimat rekomendasi/kesimpulan yang actionable
+
+── JIKA DATA CAMPURAN (ada detail sekaligus ada angka total):
+   • Mulai dari total/kesimpulan besar
+   • Lalu breakdown per entitas yang signifikan
+   • Highlight anomali atau yang paling menarik perhatian
+
+=== ATURAN WAJIB ===
+
+✅ Format angka selalu: Rp 1.234.567 (bukan 1234567)
+✅ Persentase: hitung dari data yang ada, bulatkan 1 desimal (contoh: 42,3%%)
+✅ Jika data ada baris TOTAL/GRAND TOTAL → pakai angka itu, JANGAN hitung ulang manual
+✅ Jika data hanya 1 baris → fokus jelaskan entitas itu saja, jangan dipaksakan perbandingan
+✅ Respons: 2-4 paragraf atau poin singkat, padat, tidak bertele-tele
+✅ Gunakan bahasa natural seperti sedang presentasi ke atasan
+
+❌ Jangan sebut: "tabel", "baris", "kolom", "dataset", "query", "JSON", "data di atas"  
+❌ Jangan halu: HANYA gunakan angka/nama yang benar-benar ada dalam data
+❌ Jangan ulangi pertanyaan user
+❌ Jangan paksa format insight agregat jika data adalah list, dan sebaliknya
+❌ Jika data kosong → katakan terus terang bahwa tidak ada data yang ditemukan
+
+=== CONTOH ===
+
+Pertanyaan: "tampilkan nasabah dengan saldo >= 7.485.000"
+Data: 4 nasabah (CV Sinar Terang 64jt, PT Maju Jaya 54jt, Ahmad Wijaya 24jt, Budi Santoso 7,4jt)
+
+Output yang BENAR:
+"Terdapat 4 nasabah yang memenuhi kriteria saldo minimum Rp 7.485.000. 
+CV. Sinar Terang mencatat saldo tertinggi sebesar Rp 64.975.000, diikuti PT. Maju Jaya Abadi 
+dengan Rp 54.975.000 — keduanya merupakan nasabah korporat yang mendominasi daftar ini. 
+Di sisi individu, Ahmad Wijaya (Rp 24.000.000) dan Budi Santoso (Rp 7.485.000) melengkapi daftar. 
+Perlu diperhatikan bahwa Budi Santoso berada tepat di ambang batas minimum saldo."
+
+---
+
+Pertanyaan: "total pendapatan bunga kredit"
+Data: 36 baris per produk per kantor + grand total 5,8 miliar
+
+Output yang BENAR:
+"Total pendapatan bunga dari seluruh portofolio kredit mencapai Rp 5.813.949.691. 
+Kredit Angsuran Tetap (KAT) di Cianjur menjadi kontributor terbesar dengan Rp 370.713.714 atau sekitar 6,4%% dari total. 
+Kantor Cianjur secara keseluruhan mendominasi pendapatan bunga dibanding KPO dan Hogel.
+Produk Kredit Fintech Pokok Tetap mencatat angka terendah di Rp 1.000.003 — perlu evaluasi relevansinya."`, promptAsli, dataStr)
 
 	opts := GroqOptions{
 		Temperature:     0.7,
