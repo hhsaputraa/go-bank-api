@@ -44,6 +44,15 @@ type QdrantDataResponse struct {
 	Payload map[string]interface{} `json:"payload"`
 }
 
+var vectorHTTPClient = &http.Client{
+	Timeout: 60 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Response, []byte, error) {
 	var reqBody io.Reader
 	if body != nil {
@@ -62,8 +71,7 @@ func httpDoJSON(ctx context.Context, method, url string, body any) (*http.Respon
 		req.Header.Set("api-key", config.AppConfig.QdrantAPIKey)
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := vectorHTTPClient.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -243,21 +251,44 @@ func qdrantDeleteCollection(ctx context.Context, baseURL, name string) error {
 	return err
 }
 
+var asyncTaskQueue = make(chan func(), 100)
+
+func init() {
+	// Bounded worker pool of 5 workers for background AI tasks
+	for i := 0; i < 5; i++ {
+		go func() {
+			for task := range asyncTaskQueue {
+				task()
+			}
+		}()
+	}
+}
+
+func SubmitAsyncTask(task func()) {
+	select {
+	case asyncTaskQueue <- task:
+	default:
+		log.Println("[ai] Warning: Async task queue is full, dropping non-critical background task")
+	}
+}
+
 func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
-	go func() {
+	SubmitAsyncTask(func() {
 		if config.AppConfig == nil {
 			return
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
 		log.Println("Menyimpan ke Semantic Cache...")
 		point := qdrantPoint{
 			ID:      uuid.NewString(),
 			Vector:  promptVector,
 			Payload: map[string]interface{}{"prompt_asli": promptAsli, "sql_query": sqlQuery},
 		}
-		if err := qdrantUpsertPoints(context.Background(), config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point}); err == nil {
+		if err := qdrantUpsertPoints(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCacheCollection, []qdrantPoint{point}); err == nil {
 			log.Println("Berhasil update cache.")
 		}
-	}()
+	})
 }
 
 func ManualInjectCache(promptAsli string, sqlQuery string) error {

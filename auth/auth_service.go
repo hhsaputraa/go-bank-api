@@ -90,7 +90,12 @@ func RegisterUser(req RegisterRequest) error {
 	return nil
 }
 
-func LoginUser(req LoginRequest) (string, int, error) {
+func LoginUser(ctx context.Context, req LoginRequest) (string, int, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+	}
 
 	if req.Username == "" {
 		err := errors.New("username tidak boleh kosong")
@@ -121,7 +126,7 @@ func LoginUser(req LoginRequest) (string, int, error) {
 		SELECT id_app_users, username, password_hash, full_name, is_admin, is_active, account_status
 		FROM app_users WHERE username = :1
 	`
-	err := database.DbInstance.QueryRowContext(context.Background(), query, req.Username).Scan(
+	err := database.DbInstance.QueryRowContext(ctx, query, req.Username).Scan(
 		&user.ID, &user.Username, &user.PasswordHash, &user.FullName,
 		&isAdmin, &isActive, &accountStatus,
 	)
@@ -325,8 +330,26 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 		ctx := context.WithValue(r.Context(), constants.ContextKeyUserID, claims["user_id"])
+		if username, ok := claims["username"].(string); ok {
+			ctx = context.WithValue(ctx, constants.ContextKeyUsername, username)
+		}
+		if isAdmin, ok := claims["is_admin"].(bool); ok {
+			ctx = context.WithValue(ctx, constants.ContextKeyIsAdmin, isAdmin)
+		}
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// AdminMiddleware validates JWT token, session, and requires administrator privileges
+func AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		isAdmin, ok := r.Context().Value(constants.ContextKeyIsAdmin).(bool)
+		if !ok || !isAdmin {
+			utils.SendError(w, http.StatusForbidden, "FORBIDDEN", "Akses ditolak: Membutuhkan hak akses Administrator")
+			return
+		}
+		next(w, r)
+	})
 }
 
 func LogoutUser(tokenString string) error {

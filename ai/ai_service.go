@@ -99,27 +99,27 @@ func LearnFromCorrection(prompt string, validSQL string) {
 		return
 	}
 
-	go func(p, s string) {
+	SubmitAsyncTask(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		log.Printf("AUTO-LEARNING: Mempelajari pola baru untuk: '%s'", p)
+		log.Printf("AUTO-LEARNING: Mempelajari pola baru untuk: '%s'", prompt)
 
-		vector, err := GenerateEmbedding(p)
+		vector, err := GenerateEmbedding(prompt)
 		if err != nil {
 			log.Println("[ai][ai_service][LearnFromCorrection] error:", err)
 			log.Printf("Auto-Learning gagal (Embedding): %v", err)
 			return
 		}
 
-		pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(p)).String()
+		pointID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(prompt)).String()
 		point := &pb.PointStruct{
 			Id: &pb.PointId{
 				PointIdOptions: &pb.PointId_Uuid{Uuid: pointID},
 			},
 			Vectors: &pb.Vectors{VectorsOptions: &pb.Vectors_Vector{Vector: &pb.Vector{Data: vector}}},
 			Payload: map[string]*pb.Value{
-				"prompt_asli": {Kind: &pb.Value_StringValue{StringValue: p}},
-				"sql_query":   {Kind: &pb.Value_StringValue{StringValue: s}},
+				"prompt_asli": {Kind: &pb.Value_StringValue{StringValue: prompt}},
+				"sql_query":   {Kind: &pb.Value_StringValue{StringValue: validSQL}},
 				"category":    {Kind: &pb.Value_StringValue{StringValue: "constants.CategorySQL"}},
 				"source":      {Kind: &pb.Value_StringValue{StringValue: "auto_learning_v2"}},
 				"created_at":  {Kind: &pb.Value_StringValue{StringValue: time.Now().Format(time.RFC3339)}},
@@ -134,9 +134,9 @@ func LearnFromCorrection(prompt string, validSQL string) {
 			log.Println("[ai][ai_service][LearnFromCorrection] error:", err)
 			log.Printf("Auto-Learning Gagal (Qdrant Upsert): %v", err)
 		} else {
-			log.Printf("AUTO-LEARNING SUKSES: Pola baru tersimpan. ID: %s", pointID)
+			log.Println("AUTO-LEARNING BERHASIL disimpan ke Qdrant!")
 		}
-	}(prompt, validSQL)
+	})
 }
 
 func GetSQL(userPrompt string) (models.AISqlResponse, error) {

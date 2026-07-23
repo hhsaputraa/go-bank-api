@@ -209,9 +209,11 @@ func HandleChatSession(w http.ResponseWriter, r *http.Request) {
 		cols = []string{"KODE_KANTOR", "KETERANGAN_JENIS_PINJAM", "BULAN", "NILAI_BUNGA"}
 	}
 
-	// Get DataFrame info dynamically (dtypes & head) by running Python runner with --info
+	runnerDir := getPythonRunnerDir()
+
+	// Get DataFrame info dynamically (dtypes, head, unique samples) by running Python runner with --info
 	infoCmd := exec.Command("python", "query_runner.py", absFilePath, "--info")
-	infoCmd.Dir = "c:\\Users\\Keamanan Saber\\Documents\\dataanalis"
+	infoCmd.Dir = runnerDir
 	var infoStdout, infoStderr bytes.Buffer
 	infoCmd.Stdout = &infoStdout
 	infoCmd.Stderr = &infoStderr
@@ -219,43 +221,49 @@ func HandleChatSession(w http.ResponseWriter, r *http.Request) {
 	var dfInfo string = ""
 	if err := infoCmd.Run(); err != nil {
 		log.Printf("Warning: Gagal mengambil info DataFrame: %v | stderr: %s", err, infoStderr.String())
-		// Fallback to static description
-		dfInfo = fmt.Sprintf("Kolom: %v (tipe data KODE_KANTOR adalah int64, NILAI_BUNGA adalah float64)", cols)
+		dfInfo = fmt.Sprintf("Kolom: %v", cols)
 	} else {
 		type InfoOutput struct {
-			Status  string            `json:"status"`
-			Dtypes  map[string]string `json:"dtypes"`
-			Head    []any             `json:"head"`
-			Message string            `json:"message"`
+			Status        string              `json:"status"`
+			Dtypes        map[string]string   `json:"dtypes"`
+			Head          []any               `json:"head"`
+			UniqueSamples map[string][]string `json:"unique_samples"`
+			Message       string              `json:"message"`
 		}
 		var infoOut InfoOutput
 		if err := json.Unmarshal(infoStdout.Bytes(), &infoOut); err == nil && infoOut.Status == "success" {
 			dtypesBytes, _ := json.Marshal(infoOut.Dtypes)
 			headBytes, _ := json.Marshal(infoOut.Head)
-			dfInfo = fmt.Sprintf("\nTipe Data Kolom (dtypes):\n%s\n\nPreview 3 Baris Pertama Data (head):\n%s", string(dtypesBytes), string(headBytes))
+			uniquesBytes, _ := json.Marshal(infoOut.UniqueSamples)
+			dfInfo = fmt.Sprintf("\nTipe Data Kolom (dtypes):\n%s\n\nPreview 3 Baris Pertama (head):\n%s\n\nContoh Nilai Unik per Kolom (Uniques):\n%s", string(dtypesBytes), string(headBytes), string(uniquesBytes))
 		} else {
-			dfInfo = fmt.Sprintf("Kolom: %v (tipe data KODE_KANTOR adalah int64, NILAI_BUNGA adalah float64)", cols)
+			dfInfo = fmt.Sprintf("Kolom: %v", cols)
 		}
 	}
 
-	// Step 1: Tell LLM to write Pandas code
-	systemPrompt := fmt.Sprintf(`Anda adalah asisten analisis data yang bertugas menulis satu baris kode Python Pandas untuk mengambil data dari DataFrame 'df' berdasarkan pertanyaan pengguna.
+	// Step 1: Tell LLM to write Pandas code with Semantic Intent & Value Mapping
+	systemPrompt := fmt.Sprintf(`Anda adalah asisten analisis data pintar yang bertugas menganalisis pertanyaan pengguna dan merumuskan 1 baris kode Python Pandas untuk DataFrame 'df'.
 
-Informasi Struktur & Tipe Data Riil dari DataFrame 'df' yang diunggah pengguna:
+INFORMASI DATASET DARI FILE PENGGUNA:
 %s
 
-Aturan Tipe Data & Penyaringan:
-1. Kolom dengan tipe 'int64' atau 'float64' adalah data NUMERIK. JANGAN gunakan tanda kutip untuk menyaring nilainya.
-   - Contoh: df[nama_kolom_numerik] == 100 (BENAR) | df[nama_kolom_numerik] == '100' (SALAH)
-2. Kolom dengan tipe 'object' adalah data STRING/TEKS. Gunakan tanda kutip untuk menyaring nilainya.
-   - Contoh: df[nama_kolom_teks] == 'KPR' (BENAR)
-3. Amati dengan teliti nama kolom (case-sensitive) dan contoh nilai datanya pada preview 'head' di atas sebelum menulis kode.
+LANGKAH 1: ANALISIS INTENT & KERELEVANAN KATA KUNCI (SEMANTIC VALUE MAPPING)
+- Analisislah pertanyaan pengguna terhadap 'Contoh Nilai Unik per Kolom (Uniques)' di atas.
+- Istilah pengguna MUNGKIN TIDAK SAMA PERSIS dengan nilai di CSV (contoh: pengguna menyebut 'kopi' / 'kredit kopi', tetapi di data tertulis 'KREDIT KOPI 2' atau 'KOP-2').
+- Jika ditemukan kemiripan/kerelevanan, gunakan kata kunci dari data yang paling relevan dengan fungsi .astype(str).str.contains('KEYWORD_RELEVAN', case=False, na=False).
+
+LANGKAH 2: ATURAN KODE PANDAS TAHAN BANTING & DINAMIS
+1. PENCARIAN TEKS/KATEGORI (Fuzzy & Case-Insensitive):
+   - WAJIB gunakan .astype(str).str.contains('KEYWORD', case=False, na=False) alih-alih perbandingan persis ==.
+   - Contoh: df[df['JENIS_PINJAMAN'].astype(str).str.contains('KOPI', case=False, na=False)]
+2. JIKA DITANYA "TERTINGGI / TERBESAR / TERKECIL DI CABANG/KATEGORI MANA":
+   - WAJIB kembalikan seluruh baris/kolom terkait (seperti nama/kode cabang DAN nilai angkanya), JANGAN hanya mengembalikan angkanya saja.
+   - Gunakan: result = df[filter].nlargest(1, 'NILAI_BUNGA') atau .sort_values(by='NILAI_BUNGA', ascending=False).head(1)
+3. Kolom NUMERIK (int64/float64): JANGAN gunakan tanda kutip untuk filter angka (contoh: df[kolom] > 1000). Gunakan pd.to_numeric(df[kolom], errors='coerce') jika kalkulasi agregasi.
 
 Aturan Penulisan Kode:
 - Anda WAJIB menyimpan hasil kalkulasi akhir ke dalam variabel 'result'.
-- Hanya tuliskan potongan kode Python Pandas saja. JANGAN menuliskan komentar, penjelasan, markdown, atau teks pembuka/penutup lainnya. Cukup satu baris kode saja.
-- Contoh:
-result = df[(df[nama_kolom_A] == nilai_A) & (df[nama_kolom_B] == nilai_B)][nama_kolom_C].sum()`, dfInfo)
+- Hanya tuliskan potongan kode Python Pandas saja tanpa markdown, penjelasan, atau komentar. Cukup satu baris kode saja.`, dfInfo)
 
 	codeText, err := callLLM(systemPrompt, req.Message)
 	if err != nil {
@@ -264,38 +272,37 @@ result = df[(df[nama_kolom_A] == nilai_A) & (df[nama_kolom_B] == nilai_B)][nama_
 		return
 	}
 
-	// Extract code block
-	pandasCode := extractPythonCode(stripThinkTags(codeText))
-	log.Printf("Pandas code generated: %s", pandasCode)
+	// Extract & clean code block
+	pandasCode := cleanPandasCode(codeText)
+	log.Printf("Pandas code initial generated: %s", pandasCode)
 
-	// Step 2: Execute python query_runner.py
-	cmd := exec.Command("python", "query_runner.py", absFilePath, pandasCode)
-	cmd.Dir = "c:\\Users\\Keamanan Saber\\Documents\\dataanalis" // working directory
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	// Step 2: Execute python query_runner.py with Self-Correction retry loop
+	runnerOut, finalCode, execErr := executePandasWithRetry(absFilePath, pandasCode, req.Message, dfInfo)
+	
+	// Fallback Mechanism Tier 1: Exec Default Summary Query if AI Self-Correction fails
+	if execErr != nil {
+		log.Printf("⚠️ Self-Correction Gagal total. Menjalankan Fallback Query Default...")
+		fallbackCode := "result = df.head(10).to_dict(orient='records')"
+		fallbackCmd := exec.Command("python", "query_runner.py", absFilePath, fallbackCode)
+		fallbackCmd.Dir = runnerDir
+		var fallbackStdout bytes.Buffer
+		fallbackCmd.Stdout = &fallbackStdout
 
-	err = cmd.Run()
-	if err != nil {
-		log.Printf("Gagal menjalankan python script: %v | stderr: %s", err, stderrBuf.String())
-		utils.WriteError(w, http.StatusInternalServerError, "Gagal menjalankan kalkulasi data", err.Error()+"\nStderr: "+stderrBuf.String())
-		return
-	}
+		if fbErr := fallbackCmd.Run(); fbErr == nil {
+			var fbOut RunnerOutput
+			if json.Unmarshal(fallbackStdout.Bytes(), &fbOut) == nil && fbOut.Status == "success" {
+				utils.WriteJSON(w, http.StatusOK, map[string]any{
+					"status":  "success",
+					"message": "Maaf, kalkulasi spesifik tidak dapat diproses secara langsung. Berikut pratinjau 10 data pertama dari file yang diunggah:",
+					"result":  fbOut.Result,
+					"code":    fallbackCode,
+				})
+				return
+			}
+		}
 
-	type RunnerOutput struct {
-		Status  string      `json:"status"`
-		Result  interface{} `json:"result,omitempty"`
-		Message string      `json:"message,omitempty"`
-	}
-
-	var runnerOut RunnerOutput
-	if err := json.Unmarshal(stdoutBuf.Bytes(), &runnerOut); err != nil {
-		utils.WriteError(w, http.StatusInternalServerError, "Gagal membaca hasil kalkulasi", err.Error()+"\nRaw Output: "+stdoutBuf.String())
-		return
-	}
-
-	if runnerOut.Status == "error" {
-		utils.WriteError(w, http.StatusInternalServerError, "Runner eksekusi error", runnerOut.Message)
+		// Fallback Mechanism Tier 2: User friendly error message (No raw 500 error)
+		utils.WriteError(w, http.StatusUnprocessableEntity, "PANDAS_EXECUTION_FAILED", "Sistem tidak dapat mengolah query pada file data ini. Silakan perjelas pertanyaan Anda atau periksa format file.")
 		return
 	}
 
@@ -324,9 +331,20 @@ Aturan Penting:
 		"status":  "success",
 		"message": summaryText,
 		"result":  runnerOut.Result,
-		"code":    pandasCode,
+		"code":    finalCode,
 	}
 	utils.WriteJSON(w, http.StatusOK, respPayload)
+}
+
+func getPythonRunnerDir() string {
+	if dir := os.Getenv("PYTHON_RUNNER_DIR"); dir != "" {
+		return dir
+	}
+	defaultPath := filepath.Join("c:", "Users", "Keamanan Saber", "Documents", "dataanalis")
+	if _, err := os.Stat(defaultPath); err == nil {
+		return defaultPath
+	}
+	return "."
 }
 
 func extractPythonCode(text string) string {
@@ -363,4 +381,81 @@ func stripThinkTags(text string) string {
 		text = text[:start] + text[end+len("</think>"):]
 	}
 	return strings.TrimSpace(text)
+}
+
+func cleanPandasCode(text string) string {
+	cleaned := stripThinkTags(text)
+	extracted := extractPythonCode(cleaned)
+
+	lines := strings.Split(extracted, "\n")
+	for _, line := range lines {
+		lineTrim := strings.TrimSpace(line)
+		if strings.HasPrefix(lineTrim, "result =") || strings.HasPrefix(lineTrim, "result=") {
+			return lineTrim
+		}
+	}
+	return strings.TrimSpace(extracted)
+}
+
+type RunnerOutput struct {
+	Status  string      `json:"status"`
+	Result  interface{} `json:"result,omitempty"`
+	Message string      `json:"message,omitempty"`
+}
+
+func executePandasWithRetry(absFilePath string, initialCode string, userPrompt string, dfInfo string) (RunnerOutput, string, error) {
+	currentCode := cleanPandasCode(initialCode)
+	maxRetries := 2
+	runnerDir := getPythonRunnerDir()
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		cmd := exec.Command("python", "query_runner.py", absFilePath, currentCode)
+		cmd.Dir = runnerDir
+		var stdoutBuf, stderrBuf bytes.Buffer
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+
+		err := cmd.Run()
+		var runnerOut RunnerOutput
+		jsonErr := json.Unmarshal(stdoutBuf.Bytes(), &runnerOut)
+
+		if err == nil && jsonErr == nil && runnerOut.Status == "success" {
+			log.Printf("✅ Eksekusi Pandas Sukses (Attempt %d): %s", attempt+1, currentCode)
+			return runnerOut, currentCode, nil
+		}
+
+		errMsg := stderrBuf.String()
+		if runnerOut.Message != "" {
+			errMsg = runnerOut.Message
+		}
+
+		log.Printf("⚠️ Attempt %d Gagal | Error: %s | Code: %s", attempt+1, errMsg, currentCode)
+
+		if attempt == maxRetries {
+			break
+		}
+
+		repairSystemPrompt := fmt.Sprintf(`Kode Python Pandas yang Anda buat sebelumnya mengalami ERROR saat dieksekusi:
+Kode Sebelumnya: %s
+Pesan Error Python: %s
+
+Informasi Struktur DataFrame:
+%s
+
+Tolong perbaiki kode Pandas tersebut.
+Aturan:
+- Simpan hasil akhir ke variabel 'result'.
+- Pastikan kodenya tahan banting (gunakan .astype(str).str.strip().str.upper() untuk teks, dan pd.to_numeric() untuk numerik).
+- Hanya tulis 1 baris kode murni tanpa markdown, penjelasan, atau komentar.`, currentCode, errMsg, dfInfo)
+
+		repairedCodeRaw, llmErr := callLLM(repairSystemPrompt, userPrompt)
+		if llmErr != nil {
+			log.Printf("Gagal memanggil LLM Self-Correction: %v", llmErr)
+			break
+		}
+		currentCode = cleanPandasCode(repairedCodeRaw)
+		log.Printf("🔄 Auto-Repair Code Generated: %s", currentCode)
+	}
+
+	return RunnerOutput{}, currentCode, fmt.Errorf("gagal mengeksekusi kode pandas setelah %d kali percobaan", maxRetries+1)
 }

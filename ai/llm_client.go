@@ -103,6 +103,23 @@ func fetchLLMResponse(ctx context.Context, prompt string, modelOverride string) 
 	return callGroqAPI(prompt, selectedModel, opts)
 }
 
+var sharedGroqClient = &http.Client{
+	Timeout: 60 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
+var sharedStreamClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 func callGroqAPI(prompt string, model string, options GroqOptions) (string, error) {
 	reqBody := GroqRequest{
 		Model:           model,
@@ -133,9 +150,12 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: config.AppConfig.GroqTimeout}
-	if client.Timeout == 0 {
-		client.Timeout = 30 * time.Second
+	client := sharedGroqClient
+	if config.AppConfig != nil && config.AppConfig.GroqTimeout > 0 {
+		client = &http.Client{
+			Timeout:   config.AppConfig.GroqTimeout,
+			Transport: sharedGroqClient.Transport,
+		}
 	}
 
 	resp, err := client.Do(req)
@@ -193,9 +213,8 @@ func CallGroqAPIStream(ctx context.Context, prompt string, model string, options
 	req.Header.Set("Authorization", "Bearer "+config.AppConfig.GroqAPIKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	// Timeout untuk streaming tidak bisa dipaksa secara global (karena butuh waktu selama durasi stream).
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// Reuse shared transport client for streaming connections
+	resp, err := sharedStreamClient.Do(req)
 	if err != nil {
 		err = fmt.Errorf("koneksi Groq gagal saat stream: %w", err)
 		log.Println("[ai][llm_client][CallGroqAPIStream] error:", err)

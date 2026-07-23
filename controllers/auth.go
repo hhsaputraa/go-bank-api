@@ -78,7 +78,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	req.UserAgent = r.UserAgent()
 	req.IPAddress = r.RemoteAddr
 
-	token, mustChangePwd, err := auth.LoginUser(req)
+	token, mustChangePwd, err := auth.LoginUser(r.Context(), req)
 	if err != nil {
 		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeLoginFailed, err.Error())
 		return
