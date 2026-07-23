@@ -96,10 +96,10 @@ const (
 	GroqModelFast = "llama-3.1-8b-instant"
 
 	// GroqModelDefault is the default model from config
-	GroqModelDefault = "qwen/qwen3-32b"
+	GroqModelDefault = "qwen/qwen3.6-27b"
 
 	// Available Models
-	ModelQwen32B    = "qwen/qwen3-32b"
+	ModelQwen32B    = "qwen/qwen3.6-27b"
 	ModelGPTOss120B = "openai/gpt-oss-120b" // Note: Check provider availability
 	ModelGPTOss20B  = "openai/gpt-oss-20b"  // Note: Check provider availability
 )

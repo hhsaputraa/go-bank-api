@@ -21,7 +21,7 @@ DB_PING_TIMEOUT_SECONDS=5
 GROQ_API_KEY=""
 
 # Groq model to use for SQL generation
-GROQ_MODEL=qwen/qwen3-32b
+GROQ_MODEL=qwen/qwen3.6-27b
 
 # Groq API endpoint URL
 GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions

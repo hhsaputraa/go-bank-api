@@ -9,6 +9,7 @@ API backend untuk sistem query database menggunakan Natural Language Processing 
 ## 🚀 Fitur Utama
 
 ### Core Features
+
 - **Natural Language to SQL**: Konversi pertanyaan bahasa natural menjadi SQL query menggunakan AI
 - **RAG (Retrieval-Augmented Generation)**: Menggunakan vector database untuk meningkatkan akurasi query
 - **Semantic Caching**: Cache hasil query berdasarkan similarity untuk performa lebih cepat
@@ -17,6 +18,7 @@ API backend untuk sistem query database menggunakan Natural Language Processing 
 - **JWT Authentication**: Secure authentication dengan session management
 
 ### New in v2.0 ✨
+
 - **Middleware Pattern**: CORS, Logging, Rate Limiting
 - **Graceful Shutdown**: Clean exit dengan signal handling (SIGINT/SIGTERM)
 - **Multi-Origin CORS**: Support multiple frontend URLs
@@ -75,6 +77,7 @@ SERVER_HOST=localhost
 ```
 
 **⚠️ IMPORTANT**:
+
 - Jangan commit file `.env` ke repository!
 - Generate JWT_SECRET dan AES_KEY yang random
 - AES_KEY harus tepat 32 karakter
@@ -105,16 +108,19 @@ docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
 ### 6. Build & Jalankan Aplikasi
 
 **Build**:
+
 ```bash
 go build -o bin/app.exe .
 ```
 
 **Run**:
+
 ```bash
 .\bin\app.exe
 ```
 
 **Expected Output**:
+
 ```
 Berhasil memuat file .env
 ✅ Konfigurasi berhasil dimuat dari environment variables
@@ -129,6 +135,7 @@ Aplikasi siap berjalan...
 
 **Graceful Shutdown**:
 Tekan `Ctrl+C` untuk shutdown. Server akan:
+
 - Stop menerima request baru
 - Wait untuk in-flight requests selesai (max 30s)
 - Clean up resources
@@ -145,20 +152,20 @@ Berikut adalah daftar lengkap environment variables yang tersedia:
 
 ### Database Configuration
 
-| Variable                       | Default    | Deskripsi                                                                                    |
-| ------------------------------ | ---------- | -------------------------------------------------------------------------------------------- |
-| `DB_CONN_STRING`               | _required_ | Oracle connection string: `oracle://username:password@host:port/service_name`                |
-| `DB_MAX_OPEN_CONNS`            | `25`       | Maximum number of open connections                                                           |
-| `DB_MAX_IDLE_CONNS`            | `10`       | Maximum number of idle connections                                                           |
-| `DB_CONN_MAX_LIFETIME_MINUTES` | `5`        | Connection max lifetime (minutes)                                                            |
-| `DB_PING_TIMEOUT_SECONDS`      | `5`        | Database ping timeout (seconds)                                                              |
+| Variable                       | Default    | Deskripsi                                                                     |
+| ------------------------------ | ---------- | ----------------------------------------------------------------------------- |
+| `DB_CONN_STRING`               | _required_ | Oracle connection string: `oracle://username:password@host:port/service_name` |
+| `DB_MAX_OPEN_CONNS`            | `25`       | Maximum number of open connections                                            |
+| `DB_MAX_IDLE_CONNS`            | `10`       | Maximum number of idle connections                                            |
+| `DB_CONN_MAX_LIFETIME_MINUTES` | `5`        | Connection max lifetime (minutes)                                             |
+| `DB_PING_TIMEOUT_SECONDS`      | `5`        | Database ping timeout (seconds)                                               |
 
 ### AI Service Configuration (Groq)
 
 | Variable               | Default                                           | Deskripsi                      |
 | ---------------------- | ------------------------------------------------- | ------------------------------ |
 | `GROQ_API_KEY`         | _required_                                        | Groq API key untuk LLM service |
-| `GROQ_MODEL`           | `qwen/qwen3-32b`                                  | Model yang digunakan           |
+| `GROQ_MODEL`           | `qwen/qwen3.6-27b`                                | Model yang digunakan           |
 | `GROQ_API_URL`         | `https://api.groq.com/openai/v1/chat/completions` | Groq API endpoint              |
 | `GROQ_TIMEOUT_SECONDS` | `30`                                              | HTTP timeout untuk Groq API    |
 
@@ -205,26 +212,26 @@ Berikut adalah daftar lengkap environment variables yang tersedia:
 
 ### Server Configuration
 
-| Variable        | Default              | Deskripsi                                                  |
-| --------------- | -------------------- | ---------------------------------------------------------- |
-| `SERVER_PORT`   | `8097`               | Server port                                                |
-| `SERVER_HOST`   | `localhost`          | Server host                                                |
-| `FRONTEND_URL`  | `http://localhost:5173` | Frontend URL untuk CORS (comma-separated untuk multiple) ✨ NEW |
+| Variable       | Default                 | Deskripsi                                                       |
+| -------------- | ----------------------- | --------------------------------------------------------------- |
+| `SERVER_PORT`  | `8097`                  | Server port                                                     |
+| `SERVER_HOST`  | `localhost`             | Server host                                                     |
+| `FRONTEND_URL` | `http://localhost:5173` | Frontend URL untuk CORS (comma-separated untuk multiple) ✨ NEW |
 
 ### Security Configuration ✨ NEW
 
-| Variable     | Default    | Deskripsi                                                |
-| ------------ | ---------- | -------------------------------------------------------- |
-| `JWT_SECRET` | _required_ | Secret key untuk JWT signing (generate: `openssl rand -hex 32`) |
-| `AES_KEY`    | _required_ | AES encryption key - **MUST be 32 characters** (generate: `openssl rand -hex 16`) |
-| `OPEN_ROUTER_API_KEY` | _(optional)_ | OpenRouter API key jika menggunakan OpenRouter |
+| Variable              | Default      | Deskripsi                                                                         |
+| --------------------- | ------------ | --------------------------------------------------------------------------------- |
+| `JWT_SECRET`          | _required_   | Secret key untuk JWT signing (generate: `openssl rand -hex 32`)                   |
+| `AES_KEY`             | _required_   | AES encryption key - **MUST be 32 characters** (generate: `openssl rand -hex 16`) |
+| `OPEN_ROUTER_API_KEY` | _(optional)_ | OpenRouter API key jika menggunakan OpenRouter                                    |
 
 ### Environment Configuration
 
-| Variable      | Default     | Deskripsi   |
-| ------------- | ----------- | ----------- |
-| `APP_ENV`     | `development` | Environment (development/production/staging) |
-| `DEBUG`       | `false`       | Enable debug logging                         |
+| Variable  | Default       | Deskripsi                                    |
+| --------- | ------------- | -------------------------------------------- |
+| `APP_ENV` | `development` | Environment (development/production/staging) |
+| `DEBUG`   | `false`       | Enable debug logging                         |
 
 ### Query Execution
 
@@ -239,11 +246,13 @@ Berikut adalah daftar lengkap environment variables yang tersedia:
 ### Public Endpoints
 
 #### Health Check
+
 ```http
 GET /health
 ```
 
 **Response**:
+
 ```json
 {
   "status": "API is up and running!"
@@ -255,6 +264,7 @@ GET /health
 ### Authentication Endpoints ✨ NEW
 
 #### Register
+
 ```http
 POST /api/auth/register
 Content-Type: application/json
@@ -268,6 +278,7 @@ Content-Type: application/json
 ```
 
 #### Login
+
 ```http
 POST /api/auth/login
 Content-Type: application/json
@@ -279,6 +290,7 @@ Content-Type: application/json
 ```
 
 **Response**:
+
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -287,12 +299,14 @@ Content-Type: application/json
 ```
 
 #### Get Current User (Protected)
+
 ```http
 GET /api/auth/me
 Authorization: Bearer <token>
 ```
 
 #### Logout (Protected)
+
 ```http
 POST /api/auth/logout
 Authorization: Bearer <token>
@@ -303,6 +317,7 @@ Authorization: Bearer <token>
 ### Query Endpoints
 
 #### Query dengan Natural Language
+
 ```http
 POST /api/query
 Content-Type: application/json
@@ -313,6 +328,7 @@ Content-Type: application/json
 ```
 
 **Response**:
+
 ```json
 {
   "data": [...],
@@ -322,6 +338,7 @@ Content-Type: application/json
 ```
 
 #### Enhance Prompt ✨ NEW
+
 ```http
 POST /api/enhance
 Content-Type: application/json
@@ -332,6 +349,7 @@ Content-Type: application/json
 ```
 
 **Response**:
+
 ```json
 {
   "enhanced_prompt": "Tampilkan nasabah yang memiliki saldo tabungan sebesar 20 juta rupiah atau lebih."
@@ -343,6 +361,7 @@ Content-Type: application/json
 ### Feedback Endpoints (Protected)
 
 #### Feedback/Koreksi SQL
+
 ```http
 POST /api/feedback/koreksi
 Authorization: Bearer <token>
@@ -359,11 +378,13 @@ Content-Type: application/json
 ### Admin Endpoints (Rate Limited: 10 req/min) ✨
 
 #### Retrain RAG
+
 ```http
 POST /admin/retrain
 ```
 
 **Response**:
+
 ```json
 {
   "message": "Proses retraining RAG telah selesai"
@@ -371,11 +392,13 @@ POST /admin/retrain
 ```
 
 #### List Qdrant Points
+
 ```http
 GET /admin/qdrant/list?collection=bpr_supra_rag&limit=10
 ```
 
 #### Delete Qdrant Point
+
 ```http
 DELETE /admin/qdrant/delete
 Content-Type: application/json
@@ -387,6 +410,7 @@ Content-Type: application/json
 ```
 
 #### Create Cache Entry
+
 ```http
 POST /admin/cache/create
 Content-Type: application/json
@@ -398,6 +422,7 @@ Content-Type: application/json
 ```
 
 #### Update Qdrant Point
+
 ```http
 PUT /admin/qdrant/update
 Content-Type: application/json
@@ -433,24 +458,28 @@ Setelah mengubah connection string, restart aplikasi.
 ## 🆕 What's New in v2.0
 
 ### Architecture Improvements
+
 - ✅ **Middleware Pattern**: CORS, Logging, Rate Limiting di-centralized
 - ✅ **Graceful Shutdown**: Clean exit dengan signal handling
 - ✅ **Constants Management**: No more magic numbers (semua di `constants/constants.go`)
 - ✅ **Proper ServeMux**: Tidak lagi pakai `http.DefaultServeMux`
 
 ### Security Enhancements
+
 - ✅ **Multi-Origin CORS**: Support multiple frontend URLs
 - ✅ **Rate Limiting**: Admin endpoints limited to 10 req/min
 - ✅ **JWT Authentication**: Secure auth dengan session management
 - ✅ **Environment Validation**: Validate required configs at startup
 
 ### Developer Experience
+
 - ✅ **Structured Logging**: HTTP request logging dengan metrics
 - ✅ **Better Error Messages**: Standardized error codes
 - ✅ **Documentation**: Updated docs untuk semua changes
 - ✅ **Migration Guide**: `QUICK_START_AFTER_REFACTORING.md`
 
 ### Breaking Changes
+
 1. **CORS**: Sekarang di middleware, bukan per-handler
 2. **Routes**: `RegisterRoutes()` sekarang menerima `*http.ServeMux`
 3. **Config**: Field baru `FrontendURL` (required)
@@ -463,10 +492,12 @@ Setelah mengubah connection string, restart aplikasi.
 ## 🔒 Security Best Practices
 
 ### Environment Variables
+
 - ✅ **JANGAN** commit file `.env` ke version control
 - ✅ File `.env` sudah ada di `.gitignore`
 - ✅ Gunakan `.env.example` sebagai template
 - ✅ Generate random secrets:
+
   ```bash
   # JWT Secret
   openssl rand -hex 32
@@ -476,6 +507,7 @@ Setelah mengubah connection string, restart aplikasi.
   ```
 
 ### Production Deployment
+
 - ✅ Gunakan secret management service (AWS Secrets Manager, HashiCorp Vault, dll)
 - ✅ Enable HTTPS/TLS
 - ✅ Set proper CORS origins (jangan pakai `*`)
@@ -483,6 +515,7 @@ Setelah mengubah connection string, restart aplikasi.
 - ✅ Setup proper logging & monitoring
 
 ### CORS Configuration
+
 ```bash
 # Development (multiple origins)
 FRONTEND_URL=http://localhost:3084,http://localhost:5173
@@ -506,21 +539,27 @@ FRONTEND_URL=https://app.yourdomain.com,https://admin.yourdomain.com
 ## 🐛 Troubleshooting
 
 ### Error: "FRONTEND_URL is required"
+
 **Solution**: Add `FRONTEND_URL=http://localhost:5173` to `.env`
 
 ### Error: "AES_KEY harus 32 karakter"
+
 **Solution**: Generate dengan `openssl rand -hex 16` (hasil 32 chars)
 
 ### CORS Error di Browser
+
 **Solution**:
+
 1. Pastikan `FRONTEND_URL` di `.env` sesuai dengan origin frontend
 2. Restart server setelah update `.env`
 3. Check browser console untuk detail error
 
 ### Rate Limit Error
+
 **Solution**: Tunggu 1 menit atau kurangi frekuensi request
 
 ### Graceful Shutdown Tidak Bekerja
+
 **Solution**: Pastikan menggunakan `Ctrl+C` (SIGINT), bukan force kill
 
 ---
@@ -528,6 +567,7 @@ FRONTEND_URL=https://app.yourdomain.com,https://admin.yourdomain.com
 ## 🤝 Contributing
 
 Contributions are welcome! Please:
+
 1. Fork the repository
 2. Create feature branch (`git checkout -b feature/AmazingFeature`)
 3. Commit changes (`git commit -m 'Add some AmazingFeature'`)
