@@ -23,6 +23,8 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// Protected Routes (Harus Login / Pakai Token)
 	mux.HandleFunc("/api/query", controllers.HandleDynamicQuery)
 	mux.HandleFunc("/api/enhance", controllers.HandleEnhancePrompt)
+	mux.HandleFunc("/api/upload-session", controllers.HandleUploadSession)
+	mux.HandleFunc("/api/chat-session", controllers.HandleChatSession)
 
 	// Feedback & Admin Routes (Protected)
 	mux.HandleFunc("/api/feedback/koreksi", auth.AuthMiddleware(controllers.HandleFeedbackKoreksi))

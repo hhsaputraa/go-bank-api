@@ -58,3 +58,14 @@ type EnhanceRequest struct {
 type EnhanceResponse struct {
 	EnhancedPrompt string `json:"enhanced_prompt"`
 }
+
+type ChatSessionRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+type UploadSessionResponse struct {
+	SessionID string   `json:"session_id"`
+	Columns   []string `json:"columns"`
+	Status    string   `json:"status"`
+}

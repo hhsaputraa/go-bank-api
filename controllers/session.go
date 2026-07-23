@@ -1,0 +1,366 @@
+package controllers
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	config "go-bank-api/config"
+	models "go-bank-api/models"
+	utils "go-bank-api/utils"
+
+	"github.com/google/uuid"
+)
+
+var uploadsDir = filepath.Join(".", "uploads")
+
+func init() {
+	os.MkdirAll(uploadsDir, os.ModePerm)
+}
+
+func HandleUploadSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.WriteError(w, http.StatusMethodNotAllowed, "Metode tidak diizinkan", "METHOD_NOT_ALLOWED")
+		return
+	}
+
+	r.ParseMultipartForm(10 << 20) // 10 MB limit
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "Gagal membaca file dari request", err.Error())
+		return
+	}
+	defer file.Close()
+
+	sessionID := uuid.New().String()
+	ext := filepath.Ext(handler.Filename)
+	targetPath := filepath.Join(uploadsDir, fmt.Sprintf("session_%s%s", sessionID, ext))
+
+	out, err := os.Create(targetPath)
+	if err != nil {
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal menyimpan file di server", err.Error())
+		return
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, file)
+	if err != nil {
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal menyalin file", err.Error())
+		return
+	}
+
+	// Return session ID
+	resp := models.UploadSessionResponse{
+		SessionID: sessionID,
+		Columns:   []string{"ID_KANTOR", "JENIS_PINJAMAN", "BULAN", "NILAI_BUNGA"},
+		Status:    "success",
+	}
+	utils.WriteJSON(w, http.StatusOK, resp)
+}
+
+type OpenAIRequestMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type OpenAIRequest struct {
+	Model    string                 `json:"model"`
+	Messages []OpenAIRequestMessage `json:"messages"`
+}
+
+type OpenAIResponseChoice struct {
+	Message struct {
+		Content string `json:"content"`
+	} `json:"message"`
+}
+
+type OpenAIResponse struct {
+	Choices []OpenAIResponseChoice `json:"choices"`
+}
+
+func callLLM(systemPrompt, userPrompt string) (string, error) {
+	reqBody := OpenAIRequest{
+		Model: config.AppConfig.LLMModel,
+		Messages: []OpenAIRequestMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", config.AppConfig.LLMBaseURL+"/chat/completions", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if config.AppConfig.LLMAPIKey != "" && config.AppConfig.LLMAPIKey != "none" {
+		req.Header.Set("Authorization", "Bearer "+config.AppConfig.LLMAPIKey)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("LLM API error status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var openAIResp OpenAIResponse
+	if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
+		return "", err
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		return "", fmt.Errorf("empty choices from LLM")
+	}
+
+	return openAIResp.Choices[0].Message.Content, nil
+}
+
+func getMeltedColumns(filePath string) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	firstLine, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	firstLine = strings.TrimSpace(firstLine)
+	if firstLine == "" {
+		return []string{"BULAN", "NILAI_BUNGA"}, nil
+	}
+
+	// Detect delimiter
+	delimiter := ","
+	if strings.Contains(firstLine, ";") {
+		delimiter = ";"
+	}
+
+	headers := strings.Split(firstLine, delimiter)
+	months := map[string]bool{
+		"JANUARI": true, "FEBRUARI": true, "MARET": true, "APRIL": true,
+		"MEI": true, "JUNI": true, "JULI": true, "AGUSTUS": true,
+		"SEPTEMBER": true, "OKTOBER": true, "NOVEMBER": true, "DESEMBER": true,
+	}
+
+	var idVars []string
+	for _, h := range headers {
+		h = strings.TrimSpace(h)
+		hUpper := strings.ToUpper(h)
+		if h != "" && !months[hUpper] {
+			idVars = append(idVars, hUpper)
+		}
+	}
+
+	return append(idVars, "BULAN", "NILAI_BUNGA"), nil
+}
+
+func HandleChatSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.WriteError(w, http.StatusMethodNotAllowed, "Metode tidak diizinkan", "METHOD_NOT_ALLOWED")
+		return
+	}
+
+	var req models.ChatSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "Request body JSON tidak valid", err.Error())
+		return
+	}
+
+	// Locate file
+	var filePath string
+	files, _ := filepath.Glob(filepath.Join(uploadsDir, fmt.Sprintf("session_%s.*", req.SessionID)))
+	if len(files) == 0 {
+		utils.WriteError(w, http.StatusNotFound, "Sesi file tidak ditemukan atau sudah kadaluarsa", "NOT_FOUND")
+		return
+	}
+	filePath = files[0]
+
+	// Convert filePath to absolute path for the Python subprocess
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil {
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal melacak path file absolut", err.Error())
+		return
+	}
+
+	// Get melted columns dynamically from CSV header as fallback
+	cols, err := getMeltedColumns(filePath)
+	if err != nil {
+		log.Printf("Gagal membaca header CSV: %v", err)
+		cols = []string{"KODE_KANTOR", "KETERANGAN_JENIS_PINJAM", "BULAN", "NILAI_BUNGA"}
+	}
+
+	// Get DataFrame info dynamically (dtypes & head) by running Python runner with --info
+	infoCmd := exec.Command("python", "query_runner.py", absFilePath, "--info")
+	infoCmd.Dir = "c:\\Users\\Keamanan Saber\\Documents\\dataanalis"
+	var infoStdout, infoStderr bytes.Buffer
+	infoCmd.Stdout = &infoStdout
+	infoCmd.Stderr = &infoStderr
+
+	var dfInfo string = ""
+	if err := infoCmd.Run(); err != nil {
+		log.Printf("Warning: Gagal mengambil info DataFrame: %v | stderr: %s", err, infoStderr.String())
+		// Fallback to static description
+		dfInfo = fmt.Sprintf("Kolom: %v (tipe data KODE_KANTOR adalah int64, NILAI_BUNGA adalah float64)", cols)
+	} else {
+		type InfoOutput struct {
+			Status  string            `json:"status"`
+			Dtypes  map[string]string `json:"dtypes"`
+			Head    []any             `json:"head"`
+			Message string            `json:"message"`
+		}
+		var infoOut InfoOutput
+		if err := json.Unmarshal(infoStdout.Bytes(), &infoOut); err == nil && infoOut.Status == "success" {
+			dtypesBytes, _ := json.Marshal(infoOut.Dtypes)
+			headBytes, _ := json.Marshal(infoOut.Head)
+			dfInfo = fmt.Sprintf("\nTipe Data Kolom (dtypes):\n%s\n\nPreview 3 Baris Pertama Data (head):\n%s", string(dtypesBytes), string(headBytes))
+		} else {
+			dfInfo = fmt.Sprintf("Kolom: %v (tipe data KODE_KANTOR adalah int64, NILAI_BUNGA adalah float64)", cols)
+		}
+	}
+
+	// Step 1: Tell LLM to write Pandas code
+	systemPrompt := fmt.Sprintf(`Anda adalah asisten analisis data yang bertugas menulis satu baris kode Python Pandas untuk mengambil data dari DataFrame 'df' berdasarkan pertanyaan pengguna.
+
+Informasi Struktur & Tipe Data Riil dari DataFrame 'df' yang diunggah pengguna:
+%s
+
+Aturan Tipe Data & Penyaringan:
+1. Kolom dengan tipe 'int64' atau 'float64' adalah data NUMERIK. JANGAN gunakan tanda kutip untuk menyaring nilainya.
+   - Contoh: df[nama_kolom_numerik] == 100 (BENAR) | df[nama_kolom_numerik] == '100' (SALAH)
+2. Kolom dengan tipe 'object' adalah data STRING/TEKS. Gunakan tanda kutip untuk menyaring nilainya.
+   - Contoh: df[nama_kolom_teks] == 'KPR' (BENAR)
+3. Amati dengan teliti nama kolom (case-sensitive) dan contoh nilai datanya pada preview 'head' di atas sebelum menulis kode.
+
+Aturan Penulisan Kode:
+- Anda WAJIB menyimpan hasil kalkulasi akhir ke dalam variabel 'result'.
+- Hanya tuliskan potongan kode Python Pandas saja. JANGAN menuliskan komentar, penjelasan, markdown, atau teks pembuka/penutup lainnya. Cukup satu baris kode saja.
+- Contoh:
+result = df[(df[nama_kolom_A] == nilai_A) & (df[nama_kolom_B] == nilai_B)][nama_kolom_C].sum()`, dfInfo)
+
+	codeText, err := callLLM(systemPrompt, req.Message)
+	if err != nil {
+		log.Printf("Gagal memanggil LLM untuk kode: %v", err)
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal merumuskan perintah analisa", err.Error())
+		return
+	}
+
+	// Extract code block
+	pandasCode := extractPythonCode(stripThinkTags(codeText))
+	log.Printf("Pandas code generated: %s", pandasCode)
+
+	// Step 2: Execute python query_runner.py
+	cmd := exec.Command("python", "query_runner.py", absFilePath, pandasCode)
+	cmd.Dir = "c:\\Users\\Keamanan Saber\\Documents\\dataanalis" // working directory
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err = cmd.Run()
+	if err != nil {
+		log.Printf("Gagal menjalankan python script: %v | stderr: %s", err, stderrBuf.String())
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal menjalankan kalkulasi data", err.Error()+"\nStderr: "+stderrBuf.String())
+		return
+	}
+
+	type RunnerOutput struct {
+		Status  string      `json:"status"`
+		Result  interface{} `json:"result,omitempty"`
+		Message string      `json:"message,omitempty"`
+	}
+
+	var runnerOut RunnerOutput
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &runnerOut); err != nil {
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal membaca hasil kalkulasi", err.Error()+"\nRaw Output: "+stdoutBuf.String())
+		return
+	}
+
+	if runnerOut.Status == "error" {
+		utils.WriteError(w, http.StatusInternalServerError, "Runner eksekusi error", runnerOut.Message)
+		return
+	}
+
+	// Step 3: Summarize result using LLM with concise and to-the-point prompt
+	summarizerSystemPrompt := `Anda adalah asisten analisis data perbankan yang to-the-point dan profesional.
+Tugas Anda adalah menyajikan hasil kalkulasi angka secara ringkas, jelas, akurat, dan langsung menjawab pertanyaan pengguna.
+
+Aturan Penting:
+1. JAWAB LANGSUNG: Berikan angka hasil kalkulasi secara langsung di awal kalimat. Jangan bertele-tele atau membuat pembukaan/penutup yang panjang.
+2. FORMAT RUPIAH: Selalu format nilai uang ke dalam Rupiah Indonesia yang lengkap dengan titik sebagai pemisah ribuan (contoh: Rp 37.766.662.538). Jangan gunakan notasi ilmiah.
+3. TANPA BASA-BASI (NO FLUFF): Jangan membuat analisis teoretis yang berlebihan, saran bisnis, atau rekomendasi fiktif yang tidak diminta oleh pengguna. Cukup sampaikan fakta angka hasil kalkulasi.
+4. MAKSIMAL 2 KALIMAT: Batasi respons Anda hanya untuk menjawab pertanyaan secara padat dan informatif.`
+
+	summaryPrompt := fmt.Sprintf("Pertanyaan Pengguna: \"%s\"\nHasil Kalkulasi Program: %v\n\nJawablah pertanyaan tersebut menggunakan hasil kalkulasi yang diberikan dengan mengikuti aturan penting di atas.", req.Message, runnerOut.Result)
+	summaryText, err := callLLM(summarizerSystemPrompt, summaryPrompt)
+	if err != nil {
+		log.Printf("Gagal membuat rangkuman LLM: %v", err)
+		utils.WriteError(w, http.StatusInternalServerError, "Gagal merangkum jawaban", err.Error())
+		return
+	}
+
+	summaryText = stripThinkTags(summaryText)
+
+	// Send final response
+	respPayload := map[string]any{
+		"status":  "success",
+		"message": summaryText,
+		"result":  runnerOut.Result,
+		"code":    pandasCode,
+	}
+	utils.WriteJSON(w, http.StatusOK, respPayload)
+}
+
+func extractPythonCode(text string) string {
+	if !strings.Contains(text, "```") {
+		return strings.TrimSpace(text)
+	}
+	parts := strings.Split(text, "```")
+	for _, part := range parts {
+		if strings.HasPrefix(part, "python") {
+			return strings.TrimSpace(strings.TrimPrefix(part, "python"))
+		}
+		if strings.HasPrefix(part, "py") {
+			return strings.TrimSpace(strings.TrimPrefix(part, "py"))
+		}
+	}
+	// Fallback to second block
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return strings.TrimSpace(text)
+}
+
+func stripThinkTags(text string) string {
+	for {
+		start := strings.Index(text, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(text, "</think>")
+		if end == -1 {
+			text = text[:start]
+			break
+		}
+		text = text[:start] + text[end+len("</think>"):]
+	}
+	return strings.TrimSpace(text)
+}

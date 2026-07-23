@@ -64,6 +64,12 @@ type Config struct {
 	// Security
 	JWTSecret string
 	AESKey    string
+
+	// Sessional LLM
+	LLMProvider string
+	LLMBaseURL  string
+	LLMAPIKey   string
+	LLMModel    string
 }
 
 var AppConfig *Config
@@ -126,6 +132,12 @@ func LoadConfig() (*Config, error) {
 		// Security
 		JWTSecret: getEnv("JWT_SECRET", ""),
 		AESKey:    getEnv("AES_KEY", ""),
+
+		// Sessional LLM
+		LLMProvider: getEnv("LLM_PROVIDER", "groq"),
+		LLMBaseURL:  getEnv("LLM_BASE_URL", "https://api.groq.com/openai/v1"),
+		LLMAPIKey:   getEnv("LLM_API_KEY", ""),
+		LLMModel:    getEnv("LLM_MODEL", "llama-3.1-70b-versatile"),
 	}
 
 	// Validate required fields
