@@ -340,6 +340,10 @@ func getPythonRunnerDir() string {
 	if dir := os.Getenv("PYTHON_RUNNER_DIR"); dir != "" {
 		return dir
 	}
+	localScriptsPath := filepath.Join(".", "scripts")
+	if _, err := os.Stat(filepath.Join(localScriptsPath, "query_runner.py")); err == nil {
+		return localScriptsPath
+	}
 	defaultPath := filepath.Join("c:", "Users", "Keamanan Saber", "Documents", "dataanalis")
 	if _, err := os.Stat(defaultPath); err == nil {
 		return defaultPath
