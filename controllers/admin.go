@@ -26,7 +26,8 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	utils.WriteJSON(w, http.StatusAccepted, utils.APIResponse{
-		Message: "Proses retraining RAG telah selesai",
+		Status:  "success",
+		Message: "Proses retraining RAG telah dimulai di latar belakang",
 	})
 }
 

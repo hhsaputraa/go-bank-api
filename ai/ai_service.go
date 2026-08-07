@@ -120,11 +120,16 @@ func LearnFromCorrection(prompt string, validSQL string) {
 			Payload: map[string]*pb.Value{
 				"prompt_asli": {Kind: &pb.Value_StringValue{StringValue: prompt}},
 				"sql_query":   {Kind: &pb.Value_StringValue{StringValue: validSQL}},
-				"category":    {Kind: &pb.Value_StringValue{StringValue: "constants.CategorySQL"}},
+				"category":    {Kind: &pb.Value_StringValue{StringValue: constants.CategorySQL}},
 				"source":      {Kind: &pb.Value_StringValue{StringValue: "auto_learning_v2"}},
 				"created_at":  {Kind: &pb.Value_StringValue{StringValue: time.Now().Format(time.RFC3339)}},
 			},
 		}
+		if qdrantClient == nil {
+			log.Println("[ai][ai_service][LearnFromCorrection] error: qdrantClient belum terinisialisasi")
+			return
+		}
+
 		_, err = qdrantClient.Upsert(ctx, &pb.UpsertPoints{
 			CollectionName: config.AppConfig.QdrantCollectionName,
 			Points:         []*pb.PointStruct{point},
@@ -347,6 +352,11 @@ ATURAN:
 func CheckSemanticCache(ctx context.Context, vector []float32) (*models.AISqlResponse, string, error) {
 	log.Println("Mencari di Semantic Cache Qdrant (gRPC)...")
 
+	if qdrantClient == nil {
+		log.Println("[ai][ai_service][CheckSemanticCache] warning: qdrantClient belum terinisialisasi")
+		return nil, "", fmt.Errorf("qdrant client belum terinisialisasi")
+	}
+
 	var searchLimit uint64 = config.AppConfig.CacheSearchLimit
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCacheCollection,
@@ -385,6 +395,11 @@ func CheckSemanticCache(ctx context.Context, vector []float32) (*models.AISqlRes
 }
 
 func getRAGContext(ctx context.Context, vector []float32) string {
+	if qdrantClient == nil {
+		log.Println("[ai][ai_service][getRAGContext] warning: qdrantClient belum terinisialisasi")
+		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
+	}
+
 	var searchLimit uint64 = 5
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
@@ -540,6 +555,11 @@ func sanitizeSQL(sql string) string {
 }
 
 func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, error) {
+	if qdrantClient == nil {
+		log.Println("[ai][ai_service][searchRelevantDDL] warning: qdrantClient belum terinisialisasi")
+		return "", fmt.Errorf("qdrant client belum terinisialisasi")
+	}
+
 	var limit uint64 = 5
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,

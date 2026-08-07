@@ -37,7 +37,7 @@ func MainTrain() {
 	}
 	log.Println("Koneksi DB Postgres untuk baca skema... OK.")
 
-	log.Printf("agar bersih...", config.AppConfig.QdrantCollectionName)
+	log.Printf("Menghapus collection '%s' agar bersih...", config.AppConfig.QdrantCollectionName)
 	if err := qdrantDeleteCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName); err != nil {
 		log.Println("[ai][train][MainTrain] error:", err)
 		log.Printf("Gagal menghapus collection (mungkin belum ada): %v", err)

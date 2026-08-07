@@ -138,28 +138,30 @@ func buildReferenceData(ctx context.Context) (string, error) {
 		query = strings.ReplaceAll(query, "{ID}", idCol)
 		query = strings.Replace(query, "{NAME}", nameCol, 1)
 
-		rows, err := database.DbInstance.QueryContext(ctx, query)
-		if err != nil {
-			log.Println("[ai][memory_cache][buildReferenceData] error:", err)
-			log.Printf("Warning: Gagal ambil ref data untuk %s: %v", tableName, err)
-			continue
-		}
-
-		builder.WriteString(fmt.Sprintf("TABEL REFERENSI: '%s'\n", tableName))
-		counter := 0
-		for rows.Next() {
-			var id, nama string
-			if err := rows.Scan(&id, &nama); err == nil {
-				builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
-				counter++
+		func() {
+			rows, err := database.DbInstance.QueryContext(ctx, query)
+			if err != nil {
+				log.Println("[ai][memory_cache][buildReferenceData] error:", err)
+				log.Printf("Warning: Gagal ambil ref data untuk %s: %v", tableName, err)
+				return
 			}
-		}
-		rows.Close()
+			defer rows.Close()
 
-		if counter == 0 {
-			builder.WriteString("(Tabel kosong)\n")
-		}
-		builder.WriteString("\n")
+			builder.WriteString(fmt.Sprintf("TABEL REFERENSI: '%s'\n", tableName))
+			counter := 0
+			for rows.Next() {
+				var id, nama string
+				if err := rows.Scan(&id, &nama); err == nil {
+					builder.WriteString(fmt.Sprintf("- ID '%s' = %s\n", id, nama))
+					counter++
+				}
+			}
+
+			if counter == 0 {
+				builder.WriteString("(Tabel kosong)\n")
+			}
+			builder.WriteString("\n")
+		}()
 	}
 
 	return builder.String(), nil

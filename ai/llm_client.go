@@ -139,7 +139,7 @@ func callGroqAPI(prompt string, model string, options GroqOptions) (string, erro
 
 		log.Println(cleanContent)
 	}
-	log.Println("========================================================\n")
+	log.Println("========================================================")
 	jsonBody, _ := json.Marshal(reqBody)
 
 	req, err := http.NewRequest("POST", config.AppConfig.GroqAPIURL, bytes.NewBuffer(jsonBody))

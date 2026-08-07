@@ -86,11 +86,13 @@ func (rl *RateLimiter) cleanupVisitors() {
 	for range ticker.C {
 		rl.mu.Lock()
 		for ip, v := range rl.visitors {
-			v.mu.Lock()
-			if time.Since(v.lastSeen) > 3*time.Minute {
-				delete(rl.visitors, ip)
-			}
-			v.mu.Unlock()
+			func(ip string, v *visitor) {
+				v.mu.Lock()
+				defer v.mu.Unlock()
+				if time.Since(v.lastSeen) > 3*time.Minute {
+					delete(rl.visitors, ip)
+				}
+			}(ip, v)
 		}
 		rl.mu.Unlock()
 	}
