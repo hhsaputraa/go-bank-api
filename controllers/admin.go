@@ -31,6 +31,19 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func HandleAdminRetrainStatus(w http.ResponseWriter, r *http.Request) {
+	status := ai.GetTrainingStatus()
+	utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+		"status":      "success",
+		"is_training": status.IsTraining,
+		"current":     status.Current,
+		"total":       status.Total,
+		"percentage":  status.Percentage,
+		"step":        status.CurrentStep,
+		"logs":        status.Logs,
+	})
+}
+
 func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
 	collectionName := r.URL.Query().Get("collection")
 	if collectionName == "" {

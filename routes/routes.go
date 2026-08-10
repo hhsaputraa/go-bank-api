@@ -35,10 +35,13 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/feedback/koreksi", auth.AuthMiddleware(controllers.HandleFeedbackKoreksi))
 
 	// Admin Routes (Protected: Harus Login + Role Admin + Rate Limit)
+	statusRateLimiter := middleware.RateLimitMiddleware(120, 1*time.Minute)
+
 	mux.Handle("/admin/retrain", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminRetrain)))
+	mux.Handle("/admin/retrain/status", statusRateLimiter(auth.AdminMiddleware(controllers.HandleAdminRetrainStatus)))
 	mux.Handle("/admin/otp/generate", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminGenerateOTP)))
 	mux.Handle("/admin/users", adminRateLimiter(auth.AdminMiddleware(users.HandleGetAllUsersOracle)))
-	mux.Handle("/admin/qdrant/list", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminListQdrant)))
+	mux.Handle("/admin/qdrant/list", statusRateLimiter(auth.AdminMiddleware(controllers.HandleAdminListQdrant)))
 	mux.Handle("/admin/qdrant/delete", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminDeleteQdrant)))
 	mux.Handle("/admin/cache/create", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminCacheCreate)))
 	mux.Handle("/admin/qdrant/update", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminQdrantUpdate)))
