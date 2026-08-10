@@ -12,6 +12,7 @@ import (
 
 	config "go-bank-api/config"
 	"go-bank-api/constants"
+	database "go-bank-api/database"
 	models "go-bank-api/models"
 	utils "go-bank-api/utils"
 
@@ -76,7 +77,7 @@ func InitVectorService() error {
 		log.Printf("Warning: Gagal membuat index payload: %v", err)
 	}
 
-	log.Println("✅ Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
+	log.Println("[INFO] Berhasil terkoneksi ke Layanan Vektor (Google AI & Qdrant).")
 
 	// Inisialisasi LangChain SQL Service
 	chainService, err := NewSQLChainService()
@@ -85,7 +86,7 @@ func InitVectorService() error {
 		log.Printf("Warning: Gagal inisialisasi SQLChainService: %v", err)
 	} else {
 		sqlChainService = chainService
-		log.Println("✅ Berhasil menginisialisasi LangChain Modularity Chain.")
+		log.Println("[INFO] Berhasil menginisialisasi LangChain Modularity Chain.")
 	}
 
 	// Initialize In-Memory Cache
@@ -248,17 +249,16 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		cleanContent = rawContent
 	}
 
-	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
-	thoughtMatch := reThinking.FindString(cleanContent)
-	if thoughtMatch != "" {
-		log.Printf("💭 AI Thought Process: %s", thoughtMatch)
-	}
+	sqlQuery := extractSQLFromMarkdown(cleanContent)
 
+	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
 	cleanContentText := reThinking.ReplaceAllString(cleanContent, "")
 	cleanContentText = strings.TrimSpace(cleanContentText)
 
-	sqlQuery := extractSQLFromMarkdown(cleanContentText)
-	log.Printf("🤖 RAW AI Response (Cleaned):\n%s\n", cleanContentText)
+	if sqlQuery == "" && cleanContentText != "" {
+		sqlQuery = extractSQLFromMarkdown(cleanContentText)
+	}
+
 	log.Println("SQL dari AI (Dynamic RAG via Chain):", sqlQuery)
 
 	sqlQuery = sanitizeSQL(sqlQuery)
@@ -272,12 +272,48 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return models.AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
 	}
 
+	// Dry-Run Validation & Auto-Repair Self-Correction Loop
+	sqlQuery = ValidateAndRepairSQL(ctx, sqlQuery, userPrompt)
+
 	return models.AISqlResponse{
 		SQL:        sqlQuery,
 		Vector:     promptVector,
 		PromptAsli: userPrompt,
 		IsCached:   false,
 	}, nil
+}
+
+// ValidateAndRepairSQL performs a dry-run check against database; if DB errors, triggers RepairSQLFromAI self-correction
+func ValidateAndRepairSQL(ctx context.Context, generatedSQL string, userPrompt string) string {
+	if database.DbInstance == nil {
+		return generatedSQL
+	}
+
+	cleanSQL := strings.TrimSuffix(strings.TrimSpace(generatedSQL), ";")
+	if cleanSQL == "" {
+		return generatedSQL
+	}
+
+	explainQuery := fmt.Sprintf("EXPLAIN %s", cleanSQL)
+	evalCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	_, err := database.DbInstance.ExecContext(evalCtx, explainQuery)
+	if err == nil {
+		log.Println("[INFO] Dry-run EXPLAIN validation sukses.")
+		return generatedSQL
+	}
+
+	log.Printf("[ai][ai_service] Dry-run SQL gagal (%v). Memulai perbaikan otomatis...", err)
+
+	repairedSQL, repairErr := RepairSQLFromAI(userPrompt, cleanSQL, err.Error())
+	if repairErr != nil || repairedSQL == "" {
+		log.Printf("[ai][ai_service] Perbaikan otomatis gagal: %v", repairErr)
+		return generatedSQL
+	}
+
+	log.Printf("🛠️ Auto-Repair Sukses! SQL Baru: %s", repairedSQL)
+	return repairedSQL
 }
 
 func EnhanceNaturalLanguage(draft string) (string, error) {
@@ -378,7 +414,7 @@ func CheckSemanticCache(ctx context.Context, vector []float32) (*models.AISqlRes
 		cachedPrompt := cachedPoint.GetPayload()["prompt_asli"].GetStringValue()
 
 		if topScore >= config.AppConfig.CacheSimilarityThreshold {
-			log.Printf("✅ SEMANTIC CACHE HIT! Skor: %f", topScore)
+			log.Printf("[INFO] SEMANTIC CACHE HIT! Skor: %f", topScore)
 			return &models.AISqlResponse{SQL: cachedSql, IsCached: true}, "", nil
 		}
 
@@ -704,18 +740,18 @@ Sebelum menjawab, tentukan dulu karakter data yang Anda terima:
 
 === ATURAN WAJIB ===
 
-✅ Format angka selalu: Rp 1.234.567 (bukan 1234567)
-✅ Persentase: hitung dari data yang ada, bulatkan 1 desimal (contoh: 42,3%%)
-✅ Jika data ada baris TOTAL/GRAND TOTAL → pakai angka itu, JANGAN hitung ulang manual
-✅ Jika data hanya 1 baris → fokus jelaskan entitas itu saja, jangan dipaksakan perbandingan
-✅ Respons: 2-4 paragraf atau poin singkat, padat, tidak bertele-tele
-✅ Gunakan bahasa natural seperti sedang presentasi ke atasan
+Format angka selalu: Rp 1.234.567 (bukan 1234567)
+Persentase: hitung dari data yang ada, bulatkan 1 desimal (contoh: 42,3%%)
+Jika data ada baris TOTAL/GRAND TOTAL → pakai angka itu, JANGAN hitung ulang manual
+Jika data hanya 1 baris → fokus jelaskan entitas itu saja, jangan dipaksakan perbandingan
+Respons: 2-4 paragraf atau poin singkat, padat, tidak bertele-tele
+Gunakan bahasa natural seperti sedang presentasi ke atasan
 
-❌ Jangan sebut: "tabel", "baris", "kolom", "dataset", "query", "JSON", "data di atas"  
-❌ Jangan halu: HANYA gunakan angka/nama yang benar-benar ada dalam data
-❌ Jangan ulangi pertanyaan user
-❌ Jangan paksa format insight agregat jika data adalah list, dan sebaliknya
-❌ Jika data kosong → katakan terus terang bahwa tidak ada data yang ditemukan
+Jangan sebut: "tabel", "baris", "kolom", "dataset", "query", "JSON", "data di atas"  
+Jangan halu: HANYA gunakan angka/nama yang benar-benar ada dalam data
+Jangan ulangi pertanyaan user
+Jangan paksa format insight agregat jika data adalah list, dan sebaliknya
+Jika data kosong → katakan terus terang bahwa tidak ada data yang ditemukan
 
 === CONTOH ===
 

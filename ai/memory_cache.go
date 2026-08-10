@@ -31,7 +31,7 @@ func InitMemoryCache() {
 		log.Println("[ai][memory_cache][InitMemoryCache] error:", err)
 		log.Printf("Peringatan: Gagal memuat cache saat startup: %v", err)
 	} else {
-		log.Println("✅ Data referensi statis & filter berhasil dimuat ke cache!")
+		log.Println("[INFO] Data referensi statis & filter berhasil dimuat ke cache!")
 	}
 
 	go func() {

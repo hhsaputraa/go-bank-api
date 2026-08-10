@@ -26,7 +26,7 @@ func MainTrain() {
 		log.Println("[ai][train][MainTrain] error:", err)
 		log.Fatalf("⚠️Error memuat konfigurasi: %v", err)
 	}
-	log.Println("✅ Konfigurasi berhasil dimuat")
+	log.Println("[INFO] Konfigurasi berhasil dimuat")
 
 	ctx := context.Background()
 
@@ -128,6 +128,6 @@ func MainTrain() {
 	}
 
 	log.Println("-----------------------------------------------")
-	log.Printf("✅ 'Training' selesai! Database Vektor '%s' sudah terisi (Dinamis).", config.AppConfig.QdrantCollectionName)
+	log.Printf("[INFO] 'Training' selesai! Database Vektor '%s' sudah terisi (Dinamis).", config.AppConfig.QdrantCollectionName)
 	log.Println("-----------------------------------------------")
 }

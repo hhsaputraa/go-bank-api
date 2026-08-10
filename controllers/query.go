@@ -198,7 +198,7 @@ func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("✅ Hasil Enhance: '%s'", enhancedText)
+	log.Printf("[INFO] Hasil Enhance: '%s'", enhancedText)
 
 	utils.WriteJSON(w, http.StatusOK, models.EnhanceResponse{
 		EnhancedPrompt: enhancedText,

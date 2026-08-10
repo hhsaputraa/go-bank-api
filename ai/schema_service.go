@@ -113,8 +113,99 @@ func GetDynamicSchemaContext() ([]string, error) {
 		return nil, err
 	}
 
-	log.Printf("✅ Berhasil! Mengambil %d potongan DDL dinamis.", len(contexts))
+	// Append dynamic FK Relationship Hints extracted from database catalog
+	if fkHints := GetDynamicFKRelationshipHints(context.Background()); fkHints != "" {
+		contexts = append(contexts, fkHints)
+	}
+
+	log.Printf("[INFO] Berhasil! Mengambil %d potongan DDL dinamis (termasuk Dynamic FK Hints).", len(contexts))
 	return contexts, nil
+}
+
+// GetDynamicFKRelationshipHints queries database constraints & schema metadata to dynamically generate real JOIN hints
+func GetDynamicFKRelationshipHints(ctx context.Context) string {
+	if database.DbInstance == nil {
+		return ""
+	}
+
+	schema, err := getSchemaFromConnStr()
+	if err != nil {
+		return ""
+	}
+	schema = strings.Trim(strings.TrimSpace(schema), ":")
+
+	query := `
+	SELECT 
+		a.table_name,
+		a.column_name,
+		c_pk.table_name AS r_table_name,
+		b.column_name AS r_column_name
+	FROM all_cons_columns a
+	JOIN all_constraints c ON a.constraint_name = c.constraint_name AND a.owner = c.owner
+	JOIN all_constraints c_pk ON c.r_constraint_name = c_pk.constraint_name AND c.r_owner = c_pk.owner
+	JOIN all_cons_columns b ON c_pk.constraint_name = b.constraint_name AND c_pk.owner = b.owner AND a.position = b.position
+	WHERE c.constraint_type = 'R' AND a.owner = UPPER(:1)
+	ORDER BY a.table_name, a.position
+	`
+
+	rows, err := database.DbInstance.QueryContext(ctx, query, schema)
+	var sb strings.Builder
+
+	if err == nil {
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			var tbl, col, rTbl, rCol string
+			if err := rows.Scan(&tbl, &col, &rTbl, &rCol); err == nil {
+				if count == 0 {
+					sb.WriteString("== PANDUAN RELASI JOIN ANTAR TABEL (DINAMIS DARI DATABASE) ==\n")
+				}
+				sb.WriteString(fmt.Sprintf("- %s.%s <---> %s.%s\n", tbl, col, rTbl, rCol))
+				count++
+			}
+		}
+		if count > 0 {
+			return sb.String()
+		}
+	}
+
+	// Fallback: Dynamic Column Matching (Infer FKs by matching common key column names across tables)
+	fallbackQuery := `
+	SELECT table_name, column_name 
+	FROM all_tab_columns 
+	WHERE owner = UPPER(:1) 
+	  AND (column_name LIKE 'ID_%' OR column_name LIKE '%_ID' OR column_name LIKE 'NO_%' OR column_name LIKE '%_NO' OR column_name LIKE 'KODE_%')
+	ORDER BY column_name, table_name
+	`
+
+	fallbackRows, err := database.DbInstance.QueryContext(ctx, fallbackQuery, schema)
+	if err != nil {
+		return ""
+	}
+	defer fallbackRows.Close()
+
+	colToTables := make(map[string][]string)
+	for fallbackRows.Next() {
+		var tbl, col string
+		if err := fallbackRows.Scan(&tbl, &col); err == nil {
+			colToTables[col] = append(colToTables[col], tbl)
+		}
+	}
+
+	fbCount := 0
+	for col, tables := range colToTables {
+		if len(tables) > 1 {
+			if fbCount == 0 {
+				sb.WriteString("== PANDUAN RELASI JOIN ANTAR TABEL (INFERRED DARI KOLOM SKEMA) ==\n")
+			}
+			for i := 0; i < len(tables)-1; i++ {
+				sb.WriteString(fmt.Sprintf("- %s.%s <---> %s.%s\n", tables[i], col, tables[i+1], col))
+				fbCount++
+			}
+		}
+	}
+
+	return sb.String()
 }
 
 func GetDynamicReferenceData(ctx context.Context) (string, error) {
@@ -181,7 +272,7 @@ func GetDynamicSqlExamples() ([]models.SqlExample, error) {
 	if len(contexts) == 0 {
 		log.Println("PERINGATAN: Tidak ada contoh SQL ditemukan di tabel 'rag_sql_examples'.")
 	} else {
-		log.Printf("✅ Berhasil! mengambil %d contoh SQL dinamis.", len(contexts))
+		log.Printf("[INFO] Berhasil! mengambil %d contoh SQL dinamis.", len(contexts))
 	}
 	return contexts, nil
 }
@@ -225,7 +316,7 @@ func AddSqlExample(promptAsli string, sqlKoreksi string) error {
 		return fmt.Errorf("gagal insert contekan baru ke DB: %w", err)
 	}
 
-	log.Printf("✅ Berhasil! Menyimpan contekan baru ke 'rag_sql_examples' untuk prompt: %s", promptAsli)
+	log.Printf("[INFO] Berhasil! Menyimpan contekan baru ke 'rag_sql_examples' untuk prompt: %s", promptAsli)
 	return nil
 }
 

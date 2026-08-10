@@ -51,9 +51,9 @@ func NewSQLChainService() (*SQLChainService, error) {
 func (s *SQLChainService) GenerateSQL(ctx context.Context, userPrompt string, contextData map[string]interface{}) (string, error) {
 	promptTemplate := prompts.NewPromptTemplate(
 		`
-Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: {{.today}}.
+Anda adalah ahli SQL Oracle 10g/PostgreSQL senior. Tanggal hari ini: {{.today}}.
 
-== 1. KAMUS DATA (DDL & STRUKTUR) ==
+== 1. KAMUS DATA (DDL & STRUKTUR SKEMA) ==
 {{.ddl}}
 
 == 2. LIVE DATA REFERENSI ==
@@ -69,13 +69,17 @@ Anda adalah ahli SQL Oracle 10g senior. Tanggal hari ini: {{.today}}.
 {{.softCache}}
 
 == ATURAN PENULISAN SQL ==
-1. **STRICT SCHEMA ONLY**: Hanya gunakan tabel dan kolom yang TERTULIS EKSPLISIT.
-2. **NO HALLUCINATION**: Jangan mengarang tabel.
-3. **Security**: Hanya SELECT. Dilarang INSERT/UPDATE/DELETE.
+1. **STRICT SCHEMA ONLY**: Hanya gunakan tabel dan kolom yang TERTULIS EKSPLISIT pada Kamus Data / DDL.
+2. **NO HALLUCINATION**: Dilarang mengarang tabel atau kolom yang tidak ada di skema.
+3. **Security**: Hanya query SELECT. Dilarang INSERT/UPDATE/DELETE/DROP.
 
-TUGAS ANDA:
-Sebelum menulis kode SQL, jelaskan langkah berpikir Anda di dalam tag <thought>.
-Di LUAR tag <thought>, berikan Kode SQL dalam blok markdown.
+== CARA BERPIKIR (CHAIN-OF-THOUGHT) ==
+Sebelum menulis kode SQL, Anda WAJIB menganalisis pertanyaan di dalam tag <thought> dengan langkah:
+- **Langkah 1 (Entitas)**: Sebutkan tabel dan kolom yang relevan dari DDL.
+- **Langkah 2 (Relasi JOIN)**: Jika butuh lebih dari 1 tabel, sebutkan jalur JOIN berdasarkan PANDUAN RELASI (FK HINTS).
+- **Langkah 3 (Kondisi & Agregasi)**: Tentukan WHERE filter, GROUP BY, atau ORDER BY yang dibutuhkan.
+
+TULISKAN KODE SQL FINAL DI LUAR TAG <thought> DI DALAM BLOK MARKDOWN SQL.
 
 Pertanyaan Pengguna: "{{.userPrompt}}"
 `,
@@ -99,6 +103,17 @@ Pertanyaan Pengguna: "{{.userPrompt}}"
 		return "", err
 	}
 
+	// Parse CoT thought and clean SQL
+	parser := &SQLOutputParser{}
+	thought, cleanSQL := parser.Parse(output)
+	if thought != "" {
+		log.Printf("🧠 [CoT Reasoning]:\n%s", thought)
+	}
+
+	if cleanSQL != "" {
+		return cleanSQL, nil
+	}
+
 	return output, nil
 }
 
@@ -106,7 +121,21 @@ Pertanyaan Pengguna: "{{.userPrompt}}"
 type SQLOutputParser struct{}
 
 func (p *SQLOutputParser) Parse(input string) (string, string) {
-	// Extract thought
+	// 1. Extract SQL FIRST from the raw input before stripping <thought> tags
+	reSQL := regexp.MustCompile("(?s)```sql\\s*(.*?)\\s*```")
+	sqlMatches := reSQL.FindAllStringSubmatch(input, -1)
+	sql := ""
+	for _, m := range sqlMatches {
+		c := strings.TrimSpace(m[1])
+		if strings.HasPrefix(strings.ToUpper(c), "SELECT") || strings.HasPrefix(strings.ToUpper(c), "WITH") {
+			sql = c
+		}
+	}
+	if sql == "" && len(sqlMatches) > 0 {
+		sql = strings.TrimSpace(sqlMatches[len(sqlMatches)-1][1])
+	}
+
+	// 2. Extract thought content for logging
 	reThought := regexp.MustCompile("(?s)<thought>(.*?)</thought>")
 	thoughtMatch := reThought.FindStringSubmatch(input)
 	thought := ""
@@ -114,18 +143,19 @@ func (p *SQLOutputParser) Parse(input string) (string, string) {
 		thought = strings.TrimSpace(thoughtMatch[1])
 	}
 
-	// Remove thought from output
-	cleanContent := reThought.ReplaceAllString(input, "")
-	cleanContent = strings.TrimSpace(cleanContent)
-
-	// Extract SQL
-	reSQL := regexp.MustCompile("(?s)```sql(.*?)```")
-	sqlMatch := reSQL.FindStringSubmatch(cleanContent)
-	sql := ""
-	if len(sqlMatch) > 1 {
-		sql = strings.TrimSpace(sqlMatch[1])
-	} else if strings.HasPrefix(strings.ToUpper(cleanContent), "SELECT") {
-		sql = cleanContent
+	// 3. Fallback: If no ```sql block was found, search for SELECT statement in clean text
+	if sql == "" {
+		cleanContent := reThought.ReplaceAllString(input, "")
+		cleanContent = strings.TrimSpace(cleanContent)
+		if strings.HasPrefix(strings.ToUpper(cleanContent), "SELECT") || strings.HasPrefix(strings.ToUpper(cleanContent), "WITH") {
+			sql = cleanContent
+		} else {
+			reSelect := regexp.MustCompile("(?i)(SELECT|WITH)\\s+.*")
+			selMatch := reSelect.FindString(cleanContent)
+			if selMatch != "" {
+				sql = strings.TrimSpace(selMatch)
+			}
+		}
 	}
 
 	return thought, sql

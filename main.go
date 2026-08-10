@@ -32,7 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Fatal Error: Gagal memuat konfigurasi: %v", err)
 	}
-	log.Println("✅ Konfigurasi berhasil dimuat dari environment variables")
+	log.Println("[INFO] Konfigurasi berhasil dimuat dari environment variables")
 
 	// Connect to database
 	err = database.ConnectDB()
@@ -82,7 +82,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("🛑 Shutting down server...")
+	log.Println("[WARNING] Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -91,5 +91,5 @@ func main() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("✅ Server exited gracefully")
+	log.Println("[INFO] Server exited gracefully")
 }

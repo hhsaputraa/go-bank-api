@@ -80,7 +80,7 @@ func fetchLLMResponse(ctx context.Context, prompt string, modelOverride string) 
 			var oResp map[string]any
 			if json.Unmarshal(respBody, &oResp) == nil {
 				if r, ok := oResp["response"].(string); ok && r != "" {
-					log.Println("✅ Sukses Ollama.")
+					log.Println("[INFO] Sukses Ollama.")
 					return r, nil
 				}
 			}

@@ -36,7 +36,7 @@ func InitLogger() {
 	if err != nil {
 		log.Fatalf("Gagal membuat file log: %v", err)
 	}
-	log.Println("✅ Audit Logger siap. Menulis ke activity.log")
+	log.Println("[INFO] Audit Logger siap. Menulis ke activity.log")
 }
 
 func RecordActivity(clientIP, prompt, intent, sql string, status string, errCb error, duration time.Duration) {

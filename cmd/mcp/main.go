@@ -90,7 +90,7 @@ func main() {
 			return mcp.NewToolResultError("Failed to serialize response data"), nil
 		}
 
-		responseText := fmt.Sprintf("✅ **Success**\n\n**Generated SQL**:\n```sql\n%s\n```\n\n**Result**:\n```json\n%s\n```", aiResp.SQL, string(jsonBytes))
+		responseText := fmt.Sprintf("[INFO] **Success**\n\n**Generated SQL**:\n```sql\n%s\n```\n\n**Result**:\n```json\n%s\n```", aiResp.SQL, string(jsonBytes))
 
 		return mcp.NewToolResultText(responseText), nil
 	})

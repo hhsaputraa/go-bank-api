@@ -278,7 +278,7 @@ Aturan Penulisan Kode:
 
 	// Step 2: Execute python query_runner.py with Self-Correction retry loop
 	runnerOut, finalCode, execErr := executePandasWithRetry(absFilePath, pandasCode, req.Message, dfInfo)
-	
+
 	// Fallback Mechanism Tier 1: Exec Default Summary Query if AI Self-Correction fails
 	if execErr != nil {
 		log.Printf("⚠️ Self-Correction Gagal total. Menjalankan Fallback Query Default...")
@@ -424,7 +424,7 @@ func executePandasWithRetry(absFilePath string, initialCode string, userPrompt s
 		jsonErr := json.Unmarshal(stdoutBuf.Bytes(), &runnerOut)
 
 		if err == nil && jsonErr == nil && runnerOut.Status == "success" {
-			log.Printf("✅ Eksekusi Pandas Sukses (Attempt %d): %s", attempt+1, currentCode)
+			log.Printf("[INFO] Eksekusi Pandas Sukses (Attempt %d): %s", attempt+1, currentCode)
 			return runnerOut, currentCode, nil
 		}
 
