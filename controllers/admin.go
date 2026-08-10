@@ -32,14 +32,6 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 	collectionName := r.URL.Query().Get("collection")
 	if collectionName == "" {
 		utils.WriteError(w, http.StatusBadRequest, "Validasi Gagal", "Parameter 'collection' wajib diisi")
@@ -56,15 +48,6 @@ func HandleAdminListQdrant(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		utils.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed", "Metode HTTP tidak diizinkan")
 		return
@@ -104,14 +87,6 @@ func HandleAdminCacheCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "PUT,OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		utils.WriteError(w, http.StatusMethodNotAllowed, "Method Not Allowed", "Metode HTTP tidak diizinkan")
 		return
@@ -156,15 +131,6 @@ func HandleAdminQdrantUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAdminDeleteQdrant(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "DELETE")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

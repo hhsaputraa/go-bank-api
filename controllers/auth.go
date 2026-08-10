@@ -98,6 +98,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	utils.SendSuccess(w, map[string]interface{}{
 		"message":              "Login berhasil",
 		"must_change_password": mustChangePwd,
+		"token":                token,
 	})
 }
 
@@ -324,5 +325,6 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 	utils.SendSuccess(w, map[string]interface{}{
 		"message":        "Login berhasil via OTP",
 		"account_status": accountStatus,
+		"token":          token,
 	})
 }
