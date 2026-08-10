@@ -8,6 +8,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	config "go-bank-api/config"
@@ -200,12 +201,29 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return *hardHit, nil
 	}
 
-	sqlContext := getRAGContext(ctx, promptVector)
+	var (
+		sqlContext   string
+		allDDLString string
+		ddlErr       error
+		wg           sync.WaitGroup
+	)
 
-	allDDLString, err := getDDLContext(ctx, promptVector)
-	if err != nil {
-		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-		return models.AISqlResponse{}, err
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		sqlContext = getRAGContext(ctx, promptVector)
+	}()
+
+	go func() {
+		defer wg.Done()
+		allDDLString, ddlErr = getDDLContext(ctx, promptVector)
+	}()
+
+	wg.Wait()
+
+	if ddlErr != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", ddlErr)
+		return models.AISqlResponse{}, ddlErr
 	}
 	refDataString, _ := GetDynamicReferenceData(ctx)
 	businessDict, _ := GetBusinessDictionary(ctx)
@@ -436,7 +454,7 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
 	}
 
-	var searchLimit uint64 = 5
+	var searchLimit uint64 = 4
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(vector...),
@@ -596,7 +614,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 		return "", fmt.Errorf("qdrant client belum terinisialisasi")
 	}
 
-	var limit uint64 = 5
+	var limit uint64 = 4
 	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
