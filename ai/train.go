@@ -62,11 +62,22 @@ func setTrainProgress(current, total, percentage int, step string, logMsg string
 	}
 }
 
-func MainTrain() {
+func MainTrain() bool {
 	CurrentTrainProgress.mu.Lock()
+	if CurrentTrainProgress.IsTraining {
+		CurrentTrainProgress.mu.Unlock()
+		log.Println("[INFO] Training is already in progress, skipping duplicate invocation")
+		return false
+	}
 	CurrentTrainProgress.IsTraining = true
 	CurrentTrainProgress.Logs = make([]string, 0)
 	CurrentTrainProgress.mu.Unlock()
+
+	defer func() {
+		CurrentTrainProgress.mu.Lock()
+		CurrentTrainProgress.IsTraining = false
+		CurrentTrainProgress.mu.Unlock()
+	}()
 
 	setTrainProgress(0, 100, 5, "Inisialisasi & Reset Koleksi", "Memulai proses retraining RAG...")
 
@@ -85,11 +96,9 @@ func MainTrain() {
 	if err := database.ConnectDB(); err != nil {
 		log.Println("[ai][train][MainTrain] error:", err)
 		setTrainProgress(0, 100, 0, "Error", fmt.Sprintf("Gagal koneksi ke DB: %v", err))
-		CurrentTrainProgress.mu.Lock()
-		CurrentTrainProgress.IsTraining = false
-		CurrentTrainProgress.mu.Unlock()
-		return
+		return false
 	}
+
 
 	setTrainProgress(0, 100, 10, "Inisialisasi & Reset Koleksi", "Mereset koleksi Qdrant lama...")
 	if err := qdrantDeleteCollection(ctx, config.AppConfig.QdrantURL, config.AppConfig.QdrantCollectionName); err != nil {
@@ -102,6 +111,11 @@ func MainTrain() {
 		config.AppConfig.EmbeddingVectorSize, config.AppConfig.QdrantDistanceMetric); err != nil {
 		log.Printf("Gagal membuat koleksi di Qdrant: %v", err)
 	}
+
+	if err := EnsureCategoryPayloadIndex(ctx, config.AppConfig.QdrantCollectionName); err != nil {
+		log.Printf("Warning: Gagal membuat index payload di MainTrain: %v", err)
+	}
+
 
 	dynamicDDLs, err := GetDynamicSchemaContext()
 	if err != nil {
@@ -186,9 +200,7 @@ func MainTrain() {
 
 	setTrainProgress(totalItems, totalItems, 100, "Indexing & Memuat In-Memory Cache", "Training selesai! Database Vektor siap.")
 
-	CurrentTrainProgress.mu.Lock()
-	CurrentTrainProgress.IsTraining = false
-	CurrentTrainProgress.mu.Unlock()
-
 	log.Println("[INFO] Training selesai!")
+	return true
 }
+

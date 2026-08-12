@@ -18,6 +18,15 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status := ai.GetTrainingStatus()
+	if status.IsTraining {
+		utils.WriteJSON(w, http.StatusOK, utils.APIResponse{
+			Status:  "in_progress",
+			Message: "Proses retraining RAG sedang berjalan",
+		})
+		return
+	}
+
 	log.Println("ADMIN: Menerima permintaan /admin/retrain...")
 
 	go func() {
@@ -30,6 +39,7 @@ func HandleAdminRetrain(w http.ResponseWriter, r *http.Request) {
 		Message: "Proses retraining RAG telah dimulai di latar belakang",
 	})
 }
+
 
 func HandleAdminRetrainStatus(w http.ResponseWriter, r *http.Request) {
 	status := ai.GetTrainingStatus()

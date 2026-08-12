@@ -42,14 +42,11 @@ func (e *AppError) Error() string {
 	return e.Message
 }
 
-type QueryResponse struct {
-	Status      string      `json:"status"`
-	Message     string      `json:"message,omitempty"`
-	Data        interface{} `json:"data,omitempty"`
-	Suggestions []string    `json:"suggestions,omitempty"`
-	ErrorCode   string      `json:"error_code,omitempty"`
-	ErrorDetail string      `json:"error_detail,omitempty"`
-}
+
+// Note: Query responses now use utils.APIResponse which covers
+// all the same fields (status, message, data, suggestions, error_code, error_detail).
+
+
 
 type EnhanceRequest struct {
 	DraftPrompt string `json:"draft_prompt"`

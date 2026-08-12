@@ -24,12 +24,12 @@ func ValidateSafePrompt(prompt string) error {
 	schemaKeywords := []string{
 		"ALL_TABS", "ALL_TABLES", "USER_TABLES", "DBA_TABLES", "ALL_VIEWS",
 		"DBA_VIEWS", "ALL_SOURCE", "USER_SOURCE", "ALL_USERS", "DBA_USERS",
-		"V$", "GV$",
 	}
-	strictPattern := `\b(` + strings.Join(append(strictKeywords, schemaKeywords...), "|") + `)\b`
+	strictPattern := `\b(` + strings.Join(append(strictKeywords, schemaKeywords...), "|") + `)\b|V\$[A-Z0-9_]*|GV\$[A-Z0-9_]*`
 	if regexp.MustCompile(strictPattern).MatchString(q) {
 		return fmt.Errorf("permintaan ditolak: terdeteksi kata kunci berbahaya (strict match)")
 	}
+
 	for _, word := range looseKeywords {
 		if strings.Contains(q, word) {
 			return fmt.Errorf("permintaan ditolak: terdeteksi kata kunci berbahaya '%s'", word)

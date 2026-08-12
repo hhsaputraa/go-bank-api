@@ -201,94 +201,26 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return *hardHit, nil
 	}
 
-	var (
-		sqlContext   string
-		allDDLString string
-		ddlErr       error
-		wg           sync.WaitGroup
-	)
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		sqlContext = getRAGContext(ctx, promptVector)
-	}()
-
-	go func() {
-		defer wg.Done()
-		allDDLString, ddlErr = getDDLContext(ctx, promptVector)
-	}()
-
-	wg.Wait()
-
-	if ddlErr != nil {
-		log.Println("[ai][ai_service][GetSQLWithModel] error:", ddlErr)
-		return models.AISqlResponse{}, ddlErr
-	}
-	refDataString, _ := GetDynamicReferenceData(ctx)
-	businessDict, _ := GetBusinessDictionary(ctx)
-
-	finalPrompt := buildFinalPrompt(userPrompt, allDDLString, refDataString, businessDict, sqlContext, softCacheContext)
-
-	// --- BARU: Menggunakan LangChain Modularity Chain ---
-	var cleanContent string
-	if sqlChainService != nil {
-		log.Println("🔗 Mengeksekusi via LangChain SQL Chain...")
-		contextData := map[string]interface{}{
-			"today":        time.Now().Format("2006-01-02"),
-			"ddl":          allDDLString,
-			"refData":      refDataString,
-			"businessDict": businessDict,
-			"ragContext":   sqlContext,
-			"softCache":    softCacheContext,
-			"userPrompt":   userPrompt,
-		}
-
-		chainOutput, err := sqlChainService.GenerateSQL(ctx, userPrompt, contextData)
-		if err != nil {
-			log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-			log.Printf("⚠️ LangChain Error: %v. Fallback ke legacy implementation.", err)
-			rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
-			if err != nil {
-				log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-				return models.AISqlResponse{}, err
-			}
-			cleanContent = rawContent
-		} else {
-			cleanContent = chainOutput
-		}
-	} else {
-		// Legacy Implementation
-		rawContent, err := fetchLLMResponse(ctx, finalPrompt, modelName)
-		if err != nil {
-			log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-			return models.AISqlResponse{}, err
-		}
-		cleanContent = rawContent
+	ragCtx, err := retrieveRAGContext(ctx, promptVector)
+	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
+		return models.AISqlResponse{}, err
 	}
 
-	sqlQuery := extractSQLFromMarkdown(cleanContent)
+	finalPrompt := buildFinalPrompt(userPrompt, ragCtx.DDL, ragCtx.RefData, ragCtx.BusinessDict, ragCtx.SQLContext, softCacheContext)
 
-	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
-	cleanContentText := reThinking.ReplaceAllString(cleanContent, "")
-	cleanContentText = strings.TrimSpace(cleanContentText)
+	cleanContent, err := executeSQLChain(ctx, userPrompt, finalPrompt, modelName, ragCtx, softCacheContext)
+	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
+		return models.AISqlResponse{}, err
+	}
 
-	if sqlQuery == "" && cleanContentText != "" {
-		sqlQuery = extractSQLFromMarkdown(cleanContentText)
+	sqlQuery, err := extractAndSanitizeSQLResponse(cleanContent)
+	if err != nil {
+		return models.AISqlResponse{}, err
 	}
 
 	log.Println("SQL dari AI (Dynamic RAG via Chain):", sqlQuery)
-
-	sqlQuery = sanitizeSQL(sqlQuery)
-	if sqlQuery == "" {
-		if len(cleanContentText) > 0 {
-			return models.AISqlResponse{}, &models.AppError{
-				Code:    constants.ErrCodeAiRefusal,
-				Message: cleanContentText,
-			}
-		}
-		return models.AISqlResponse{}, errors.New("SQL tidak aman atau tidak valid")
-	}
 
 	// Dry-Run Validation & Auto-Repair Self-Correction Loop
 	sqlQuery = ValidateAndRepairSQL(ctx, sqlQuery, userPrompt)
@@ -301,7 +233,93 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 	}, nil
 }
 
+type RAGContextResult struct {
+	SQLContext   string
+	DDL          string
+	RefData      string
+	BusinessDict string
+}
+
+func retrieveRAGContext(ctx context.Context, promptVector []float32) (*RAGContextResult, error) {
+	var (
+		res    RAGContextResult
+		ddlErr error
+		wg     sync.WaitGroup
+	)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		res.SQLContext = getRAGContext(ctx, promptVector)
+	}()
+
+	go func() {
+		defer wg.Done()
+		res.DDL, ddlErr = getDDLContext(ctx, promptVector)
+	}()
+
+	wg.Wait()
+
+	if ddlErr != nil {
+		return nil, ddlErr
+	}
+
+	res.RefData, _ = GetDynamicReferenceData(ctx)
+	res.BusinessDict, _ = GetBusinessDictionary(ctx)
+	return &res, nil
+}
+
+func executeSQLChain(ctx context.Context, userPrompt, finalPrompt, modelName string, ragCtx *RAGContextResult, softCache string) (string, error) {
+	if sqlChainService != nil {
+		log.Println("🔗 Mengeksekusi via LangChain SQL Chain...")
+		contextData := map[string]interface{}{
+			"today":        time.Now().Format("2006-01-02"),
+			"ddl":          ragCtx.DDL,
+			"refData":      ragCtx.RefData,
+			"businessDict": ragCtx.BusinessDict,
+			"ragContext":   ragCtx.SQLContext,
+			"softCache":    softCache,
+			"userPrompt":   userPrompt,
+		}
+
+		chainOutput, err := sqlChainService.GenerateSQL(ctx, userPrompt, contextData)
+		if err == nil {
+			return chainOutput, nil
+		}
+		log.Println("[ai][ai_service][executeSQLChain] error:", err)
+		log.Printf("⚠️ LangChain Error: %v. Fallback ke direct LLM implementation.", err)
+	}
+
+	return fetchLLMResponse(ctx, finalPrompt, modelName)
+}
+
+func extractAndSanitizeSQLResponse(cleanContent string) (string, error) {
+	sqlQuery := extractSQLFromMarkdown(cleanContent)
+
+	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
+	cleanContentText := reThinking.ReplaceAllString(cleanContent, "")
+	cleanContentText = strings.TrimSpace(cleanContentText)
+
+	if sqlQuery == "" && cleanContentText != "" {
+		sqlQuery = extractSQLFromMarkdown(cleanContentText)
+	}
+
+	sqlQuery = sanitizeSQL(sqlQuery)
+	if sqlQuery == "" {
+		if len(cleanContentText) > 0 {
+			return "", &models.AppError{
+				Code:    constants.ErrCodeAiRefusal,
+				Message: cleanContentText,
+			}
+		}
+		return "", errors.New("SQL tidak aman atau tidak valid")
+	}
+
+	return sqlQuery, nil
+}
+
 // ValidateAndRepairSQL performs a dry-run check against database; if DB errors, triggers RepairSQLFromAI self-correction
+
 func ValidateAndRepairSQL(ctx context.Context, generatedSQL string, userPrompt string) string {
 	if database.DbInstance == nil {
 		return generatedSQL
@@ -312,13 +330,13 @@ func ValidateAndRepairSQL(ctx context.Context, generatedSQL string, userPrompt s
 		return generatedSQL
 	}
 
-	explainQuery := fmt.Sprintf("EXPLAIN %s", cleanSQL)
+	explainQuery := fmt.Sprintf("EXPLAIN PLAN FOR %s", cleanSQL)
 	evalCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	_, err := database.DbInstance.ExecContext(evalCtx, explainQuery)
 	if err == nil {
-		log.Println("[INFO] Dry-run EXPLAIN validation sukses.")
+		log.Println("[INFO] Dry-run EXPLAIN PLAN validation sukses.")
 		return generatedSQL
 	}
 
@@ -455,7 +473,7 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 	}
 
 	var searchLimit uint64 = 4
-	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
+	req := &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(vector...),
 		WithPayload:    pb.NewWithPayload(true),
@@ -465,7 +483,14 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: constants.CategorySQL}}}},
 			}},
 		},
-	})
+	}
+
+	searchResponse, err := qdrantClient.Query(ctx, req)
+	if err != nil && strings.Contains(err.Error(), "Index required") {
+		log.Println("[ai] Index 'category' belum ada di Qdrant, membuat otomatis...")
+		_ = EnsureCategoryPayloadIndex(ctx, config.AppConfig.QdrantCollectionName)
+		searchResponse, err = qdrantClient.Query(ctx, req)
+	}
 
 	if err != nil || len(searchResponse) == 0 {
 		if err != nil {
@@ -473,6 +498,7 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 		}
 		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
 	}
+
 
 	if searchResponse[0].Score < constants.RAGMinimumScore {
 		log.Println("Score RAG rendah. Mengabaikan contoh RAG.")
@@ -615,7 +641,7 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 	}
 
 	var limit uint64 = 4
-	searchResponse, err := qdrantClient.Query(ctx, &pb.QueryPoints{
+	req := &pb.QueryPoints{
 		CollectionName: config.AppConfig.QdrantCollectionName,
 		Query:          pb.NewQuery(promptVector...),
 		WithPayload:    pb.NewWithPayload(true),
@@ -625,11 +651,20 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 				ConditionOneOf: &pb.Condition_Field{Field: &pb.FieldCondition{Key: "category", Match: &pb.Match{MatchValue: &pb.Match_Keyword{Keyword: constants.CategoryDDL}}}},
 			}},
 		},
-	})
+	}
+
+	searchResponse, err := qdrantClient.Query(ctx, req)
+	if err != nil && strings.Contains(err.Error(), "Index required") {
+		log.Println("[ai] Index 'category' belum ada di Qdrant, membuat otomatis...")
+		_ = EnsureCategoryPayloadIndex(ctx, config.AppConfig.QdrantCollectionName)
+		searchResponse, err = qdrantClient.Query(ctx, req)
+	}
+
 	if err != nil {
 		log.Println("[ai][ai_service][searchRelevantDDL] error:", err)
 		return "", err
 	}
+
 
 	var sb strings.Builder
 	count := 0
@@ -805,74 +840,3 @@ Produk Kredit Fintech Pokok Tetap mencatat angka terendah di Rp 1.000.003 — pe
 
 	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
 }
-
-// func GenerateInsightStream(ctx context.Context, promptAsli string, tableData QueryResult, modelName string, chunkChan chan<- string, errChan chan<- error) {
-// 	// 1. SANITASI DATA (Keamanan Lapisan Pertama)
-// 	// Filter kolom yang dikirim ke AI agar data sensitif tidak pernah keluar dari server
-// 	safeColumns := []string{}
-// 	sensitiveKeywords := []string{"id_nasabah", "cif", "nik", "password", "pin", "token", "no_hp"}
-
-// 	for _, col := range tableData.Columns {
-// 		isSensitive := false
-// 		lowerCol := strings.ToLower(col)
-// 		for _, kw := range sensitiveKeywords {
-// 			if strings.Contains(lowerCol, kw) {
-// 				isSensitive = true
-// 				break
-// 			}
-// 		}
-// 		if !isSensitive {
-// 			safeColumns = append(safeColumns, col)
-// 		}
-// 	}
-
-// 	// Batasi baris data maksimal 15 agar hemat token dan memori context
-// 	maxRows := 15
-// 	limitedRows := tableData.Rows
-// 	if len(limitedRows) > maxRows {
-// 		limitedRows = limitedRows[:maxRows]
-// 	}
-
-// 	// Buat map baru hanya dengan kolom yang aman
-// 	sanitizedRows := make([]map[string]interface{}, 0)
-// 	for _, row := range limitedRows {
-// 		safeRow := make(map[string]interface{})
-// 		for _, col := range safeColumns {
-// 			safeRow[col] = row[col]
-// 		}
-// 		sanitizedRows = append(sanitizedRows, safeRow)
-// 	}
-
-// 	compactData := map[string]interface{}{
-// 		"columns": safeColumns,
-// 		"rows":    sanitizedRows,
-// 	}
-
-// 	dataBytes, _ := json.Marshal(compactData)
-// 	dataStr := string(dataBytes)
-
-// 	// 2. PROMPT YANG LEBIH KETAT DAN SPESIFIK
-// 	systemPrompt := fmt.Sprintf(`Anda adalah data analis perbankan yang bertugas memberikan ringkasan eksekutif dari hasil kueri database.
-// Pertanyaan User: "%s"
-// Sampel Data (JSON):
-// %s
-
-// ATURAN KETAT (WAJIB DIIKUTI):
-// 1. BERDASARKAN FAKTA SAJA: Dilarang keras menebak motif, penyebab, atau memberikan rekomendasi spekulatif di luar data yang ada. Jika saldo 0, cukup nyatakan saldo 0 tanpa berasumsi akun tersebut tidak aktif atau berisiko.
-// 2. PERLINDUNGAN PRIVASI: Jika harus menyebutkan nama orang, samarkan nama belakangnya (Contoh: Dewi A***). Jangan pernah menyebutkan ID, NIK, atau nomor rekening lengkap.
-// 3. FORMAT: Berikan maksimal 2 paragraf singkat. Jangan menjelaskan struktur JSON atau nama kolom secara teknis.
-// 4. FOKUS: Langsung berikan jawaban yang relevan dengan Pertanyaan User berdasarkan angka yang tersedia.`, promptAsli, dataStr)
-
-// 	// 3. PENYESUAIAN PARAMETER UNTUK PRESISI
-// 	opts := GroqOptions{
-// 		Temperature:     0.2, // Diturunkan drastis agar tidak halu/terlalu kreatif
-// 		TopP:            0.9,
-// 		ReasoningFormat: "hidden",
-// 	}
-
-// 	if modelName == "" {
-// 		modelName = config.AppConfig.GroqModel // pastikan mengambil dari config yang benar
-// 	}
-
-// 	go CallGroqAPIStream(ctx, systemPrompt, modelName, opts, chunkChan, errChan)
-// }

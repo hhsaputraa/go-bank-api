@@ -5,11 +5,17 @@ import (
 	"net/http"
 )
 
+// APIResponse is the unified response envelope for all API endpoints.
+// It covers both general responses and query-specific responses
+// (which may include suggestions or structured error codes).
 type APIResponse struct {
-	Status  string      `json:"status"`
-	Message string      `json:"message,omitempty"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Status      string      `json:"status"`
+	Message     string      `json:"message,omitempty"`
+	Data        interface{} `json:"data,omitempty"`
+	Error       string      `json:"error,omitempty"`
+	ErrorCode   string      `json:"error_code,omitempty"`
+	ErrorDetail string      `json:"error_detail,omitempty"`
+	Suggestions []string    `json:"suggestions,omitempty"`
 }
 
 func WriteJSON(w http.ResponseWriter, code int, payload interface{}) {
@@ -35,3 +41,4 @@ func WriteError(w http.ResponseWriter, code int, message string, errDetail strin
 		Error:   errDetail,
 	})
 }
+

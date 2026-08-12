@@ -134,7 +134,7 @@ func qdrantCreateCollection(ctx context.Context, baseURL, name string, size int,
 }
 
 func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fieldName, schemaType string) error {
-	url := fmt.Sprintf("%s/collections/%s/index", baseURL, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/index?wait=true", baseURL, collectionName)
 	req := map[string]string{"field_name": fieldName, "field_schema": schemaType}
 	resp, body, err := httpDoJSON(ctx, "PUT", url, req)
 	if err != nil {
@@ -143,10 +143,34 @@ func qdrantCreatePayloadIndex(ctx context.Context, baseURL, collectionName, fiel
 	if resp.StatusCode == 200 {
 		return nil
 	}
+	if strings.Contains(string(body), "already exists") {
+		return nil
+	}
 	err = fmt.Errorf("err %d: %s", resp.StatusCode, string(body))
 	log.Println("[ai][vector_store][qdrantCreatePayloadIndex] error:", err)
 	return err
 }
+
+func EnsureCategoryPayloadIndex(ctx context.Context, collectionName string) error {
+	if config.AppConfig == nil {
+		return nil
+	}
+	// 1. Coba lewat gRPC jika client tersedia
+	if qdrantClient != nil {
+		fieldType := pb.FieldType_FieldTypeKeyword
+		_, err := qdrantClient.CreateFieldIndex(ctx, &pb.CreateFieldIndexCollection{
+			CollectionName: collectionName,
+			FieldName:      "category",
+			FieldType:      &fieldType,
+		})
+		if err == nil || strings.Contains(strings.ToLower(fmt.Sprintf("%v", err)), "already exists") {
+			return nil
+		}
+	}
+	// 2. Fallback via REST API
+	return qdrantCreatePayloadIndex(ctx, config.AppConfig.QdrantURL, collectionName, "category", "keyword")
+}
+
 
 func DeleteQdrantPoint(ctx context.Context, collectionName string, pointID string) error {
 	url := fmt.Sprintf("%s/collections/%s/points/delete?wait=true", config.AppConfig.QdrantURL, collectionName)

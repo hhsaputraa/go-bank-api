@@ -169,50 +169,36 @@ func getEnv(key, defaultValue string) string {
 	return value
 }
 
-func getEnvAsInt(key string, defaultValue int) int {
+func getEnvParsed[T any](key string, defaultValue T, parser func(string) (T, error)) T {
 	valueStr := os.Getenv(key)
 	if valueStr == "" {
 		return defaultValue
 	}
-	value, err := strconv.Atoi(valueStr)
+	parsed, err := parser(valueStr)
 	if err != nil {
 		return defaultValue
 	}
-	return value
+	return parsed
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+	return getEnvParsed(key, defaultValue, strconv.Atoi)
 }
 
 func getEnvAsUint64(key string, defaultValue uint64) uint64 {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.ParseUint(valueStr, 10, 64)
-	if err != nil {
-		return defaultValue
-	}
-	return value
+	return getEnvParsed(key, defaultValue, func(s string) (uint64, error) {
+		return strconv.ParseUint(s, 10, 64)
+	})
 }
 
 func getEnvAsFloat32(key string, defaultValue float32) float32 {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.ParseFloat(valueStr, 32)
-	if err != nil {
-		return defaultValue
-	}
-	return float32(value)
+	return getEnvParsed(key, defaultValue, func(s string) (float32, error) {
+		v, err := strconv.ParseFloat(s, 32)
+		return float32(v), err
+	})
 }
 
 func getEnvAsBool(key string, defaultValue bool) bool {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.ParseBool(valueStr)
-	if err != nil {
-		return defaultValue
-	}
-	return value
+	return getEnvParsed(key, defaultValue, strconv.ParseBool)
 }
+

@@ -108,19 +108,9 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userIDVal := r.Context().Value(constants.ContextKeyUserID)
-	if userIDVal == nil {
+	userID, err := utils.GetUserIDFromContext(r.Context().Value(constants.ContextKeyUserID))
+	if err != nil {
 		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeUnauthorized, "Token tidak valid")
-		return
-	}
-	// Safely cast userID
-	var userID int64
-	if v, ok := userIDVal.(float64); ok {
-		userID = int64(v)
-	} else if v, ok := userIDVal.(int64); ok {
-		userID = v
-	} else {
-		utils.SendError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "User ID invalid")
 		return
 	}
 
@@ -221,20 +211,9 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ambil UserID dari Context (hasil dari AuthMiddleware)
-	userIDVal := r.Context().Value(constants.ContextKeyUserID)
-	if userIDVal == nil {
+	userID, err := utils.GetUserIDFromContext(r.Context().Value(constants.ContextKeyUserID))
+	if err != nil {
 		utils.WriteError(w, http.StatusUnauthorized, constants.ErrCodeUnauthorized, "Token tidak valid")
-		return
-	}
-
-	// Konversi UserID (JWT numeric biasanya float64)
-	var userID int64
-	if v, ok := userIDVal.(float64); ok {
-		userID = int64(v)
-	} else if v, ok := userIDVal.(int64); ok { // Jaga-jaga kalau formatnya int
-		userID = v
-	} else {
-		utils.WriteError(w, http.StatusInternalServerError, "Format User ID salah", "User ID context salah format")
 		return
 	}
 
@@ -248,10 +227,11 @@ func HandleMe(w http.ResponseWriter, r *http.Request) {
 		FROM app_users 
 		WHERE id_app_users = :1
 	`
-	err := database.DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
+	err = database.DbInstance.QueryRowContext(r.Context(), query, userID).Scan(
 		&user.ID, &user.Username, &user.FullName, &user.Email,
 		&isAdminInt, &isActiveInt, &user.LastLoginAt, &accountStatusInt,
 	)
+
 
 	if err != nil {
 		log.Printf("Error get user %d: %v", userID, err)

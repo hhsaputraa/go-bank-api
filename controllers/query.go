@@ -40,21 +40,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Menerima Prompt (Normalized): %s | Model: %s", normalizedPrompt, selectedModel)
 
 	// --- EARLY CACHE CHECK (CONTINUOUS CHAT FIX) ---
-	var aiResp *models.AISqlResponse
-	promptVector, vectorErr := ai.GenerateEmbedding(normalizedPrompt)
-	if vectorErr == nil {
-		hardHit, _, checkErr := ai.CheckSemanticCache(r.Context(), promptVector)
-		if checkErr == nil && hardHit != nil {
-			log.Printf("⚡ EARLY CACHE HIT (%s): Langsung menggunakan query cache", normalizedPrompt)
-			aiResp = hardHit
-			aiResp.PromptAsli = normalizedPrompt
-			aiResp.Vector = promptVector
-			aiResp.IsCached = true
-		}
-	} else {
-		log.Printf("Warning: Gagal generate embedding awal: %v", vectorErr)
-	}
-	// -----------------------------------------------
+	aiResp := checkEarlySemanticCache(r.Context(), normalizedPrompt)
 
 	// Jika belum ada di cache (Cache Miss)
 	if aiResp == nil {
@@ -99,7 +85,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
-	data, fixedSQL, execErr := executeWithRetry(*aiResp)
+	data, fixedSQL, execErr := ai.ExecuteWithRetry(*aiResp)
 	if execErr != nil {
 		finalStatus = "DB_ERROR"
 		finalError = execErr
@@ -112,14 +98,30 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	finalStatus = constants.StatusSuccess
 	generatedSQL = fixedSQL
-	if !aiResp.IsCached {
-		go ai.SaveToCache(aiResp.PromptAsli, aiResp.Vector, fixedSQL)
-	}
-	if strings.TrimSpace(fixedSQL) != strings.TrimSpace(aiResp.SQL) {
-		log.Println("REINFORCEMNT : terdeteksi perbaikan SQL. Menyimpan")
-		go ai.LearnFromCorrection(aiResp.PromptAsli, fixedSQL)
+	ai.ProcessPostExecution(*aiResp, fixedSQL)
+
+	streamSSEExecution(w, r, normalizedPrompt, data, selectedModel)
+}
+
+func checkEarlySemanticCache(ctx context.Context, normalizedPrompt string) *models.AISqlResponse {
+	promptVector, vectorErr := ai.GenerateEmbedding(normalizedPrompt)
+	if vectorErr != nil {
+		log.Printf("Warning: Gagal generate embedding awal: %v", vectorErr)
+		return nil
 	}
 
+	hardHit, _, checkErr := ai.CheckSemanticCache(ctx, promptVector)
+	if checkErr == nil && hardHit != nil {
+		log.Printf("⚡ EARLY CACHE HIT (%s): Langsung menggunakan query cache", normalizedPrompt)
+		hardHit.PromptAsli = normalizedPrompt
+		hardHit.Vector = promptVector
+		hardHit.IsCached = true
+		return hardHit
+	}
+	return nil
+}
+
+func streamSSEExecution(w http.ResponseWriter, r *http.Request, prompt string, data ai.QueryResult, selectedModel string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -137,7 +139,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	chunkChan := make(chan string)
 	errChan := make(chan error)
 
-	go ai.GenerateInsightStream(r.Context(), normalizedPrompt, data, selectedModel, chunkChan, errChan)
+	go ai.GenerateInsightStream(r.Context(), prompt, data, selectedModel, chunkChan, errChan)
 
 	// 3. Render event listener loop
 	for {
@@ -172,6 +174,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleEnhancePrompt(w http.ResponseWriter, r *http.Request) {
+
 	// CORS is handled by global middleware
 
 	if r.Method != http.MethodPost {
@@ -297,28 +300,3 @@ func handleAIError(w http.ResponseWriter, err error, intent *string, status *str
 	utils.SendError(w, http.StatusInternalServerError, constants.ErrCodeAIGenerationFailed, "Gagal menghasilkan query SQL")
 }
 
-func executeWithRetry(aiResp models.AISqlResponse) (ai.QueryResult, string, error) {
-	data, execErr := ai.ExecuteDynamicQuery(aiResp.SQL, nil)
-	fixedSQL := aiResp.SQL
-
-	if execErr != nil {
-		log.Printf("Eksekusi Gagal: %v. Mencoba Self-Correction...", execErr)
-
-		repairedSQL, repairErr := ai.RepairSQLFromAI(aiResp.PromptAsli, aiResp.SQL, execErr.Error())
-		if repairErr == nil {
-			log.Printf("🔄 Mencoba eksekusi SQL Perbaikan: %s", repairedSQL)
-			dataRetry, execErrRetry := ai.ExecuteDynamicQuery(repairedSQL, nil)
-
-			if execErrRetry == nil {
-				log.Println("Self-Correction Berhasil menyelamatkan request!")
-				return dataRetry, repairedSQL, nil
-			}
-			log.Printf("Self-Correction juga gagal: %v", execErrRetry)
-		} else {
-			log.Printf("Gagal generate perbaikan: %v", repairErr)
-		}
-		return ai.QueryResult{}, fixedSQL, execErr
-	}
-
-	return data, fixedSQL, nil
-}
