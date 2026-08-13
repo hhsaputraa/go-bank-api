@@ -39,34 +39,29 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Menerima Prompt (Normalized): %s | Model: %s", normalizedPrompt, selectedModel)
 
-	// --- EARLY CACHE CHECK (CONTINUOUS CHAT FIX) ---
-	aiResp := checkEarlySemanticCache(r.Context(), normalizedPrompt)
-
-	// Jika belum ada di cache (Cache Miss)
-	if aiResp == nil {
-		if handleAbsurdityCheck(r.Context(), w, normalizedPrompt) {
-			return
-		}
-
-		if err := utils.ValidateSafePrompt(normalizedPrompt); err != nil {
-			detectedIntent = constants.IntentAttack
-			finalStatus = "BLOCKED"
-			finalError = err
-			log.Printf("SECURITY BLOCK: %v", err)
-			utils.SendError(w, http.StatusForbidden, constants.ErrCodeDangerousIntent, err.Error())
-			return
-		}
-
-		resp, err := ai.GetSQLWithModel(normalizedPrompt, selectedModel)
-		if err != nil {
-			handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
-			return
-		}
-
-		// If prompt was rewritten, save original prompt so it can be cached accurately later
-		resp.PromptAsli = normalizedPrompt
-		aiResp = &resp
+	if handleAbsurdityCheck(r.Context(), w, normalizedPrompt) {
+		return
 	}
+
+	if err := utils.ValidateSafePrompt(normalizedPrompt); err != nil {
+		detectedIntent = constants.IntentAttack
+		finalStatus = "BLOCKED"
+		finalError = err
+		log.Printf("SECURITY BLOCK: %v", err)
+		utils.SendError(w, http.StatusForbidden, constants.ErrCodeDangerousIntent, err.Error())
+		return
+	}
+
+	resp, err := ai.GetSQLWithModel(normalizedPrompt, selectedModel)
+	if err != nil {
+		handleAIError(w, err, &detectedIntent, &finalStatus, &finalError)
+		return
+	}
+
+	// If prompt was rewritten, save original prompt so it can be cached accurately later
+	resp.PromptAsli = normalizedPrompt
+	aiResp := &resp
+
 
 	if aiResp.IsAmbiguous {
 		detectedIntent = constants.IntentAmbiguous
@@ -103,25 +98,8 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	streamSSEExecution(w, r, normalizedPrompt, data, selectedModel)
 }
 
-func checkEarlySemanticCache(ctx context.Context, normalizedPrompt string) *models.AISqlResponse {
-	promptVector, vectorErr := ai.GenerateEmbedding(normalizedPrompt)
-	if vectorErr != nil {
-		log.Printf("Warning: Gagal generate embedding awal: %v", vectorErr)
-		return nil
-	}
-
-	hardHit, _, checkErr := ai.CheckSemanticCache(ctx, promptVector)
-	if checkErr == nil && hardHit != nil {
-		log.Printf("⚡ EARLY CACHE HIT (%s): Langsung menggunakan query cache", normalizedPrompt)
-		hardHit.PromptAsli = normalizedPrompt
-		hardHit.Vector = promptVector
-		hardHit.IsCached = true
-		return hardHit
-	}
-	return nil
-}
-
 func streamSSEExecution(w http.ResponseWriter, r *http.Request, prompt string, data ai.QueryResult, selectedModel string) {
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")

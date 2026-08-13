@@ -107,7 +107,7 @@ Pertanyaan Pengguna: "{{.userPrompt}}"
 	parser := &SQLOutputParser{}
 	thought, cleanSQL := parser.Parse(output)
 	if thought != "" {
-		log.Printf("🧠 [CoT Reasoning]:\n%s", thought)
+		log.Printf("[CoT Reasoning]:\n%s", thought)
 	}
 
 	if cleanSQL != "" {
@@ -163,7 +163,6 @@ func (p *SQLOutputParser) Parse(input string) (string, string) {
 
 // GetSQLWithChain is a high-level entry point that uses the new LangChain implementation
 func GetSQLWithChain(ctx context.Context, userPrompt string, contextData map[string]interface{}) (string, error) {
-	// Initialize service
 	service, err := NewSQLChainService()
 	if err != nil {
 		log.Println("[ai][chain_service][GetSQLWithChain] error:", err)

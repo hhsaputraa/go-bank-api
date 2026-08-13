@@ -12,8 +12,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 	"sync"
+	"time"
 
 	"github.com/google/generative-ai-go/genai"
 )
@@ -71,7 +71,7 @@ func GenerateEmbedding(text string) ([]float32, error) {
 	if entry, found := embeddingCache[cleanText]; found {
 		if time.Since(entry.createdAt) < 24*time.Hour {
 			embeddingMu.RUnlock()
-			log.Printf("⚡ EMBEDDING CACHE HIT (RAM): '%s'", cleanText)
+			log.Printf("EMBEDDING CACHE HIT (RAM): '%s'", cleanText)
 			return entry.vector, nil
 		}
 	}

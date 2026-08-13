@@ -54,20 +54,14 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	tx, err := database.DbInstance.BeginTx(ctx, nil)
-	if err != nil {
-		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
-		return result, fmt.Errorf("gagal memulai transaksi database: %w", err)
-	}
-	defer tx.Rollback()
-
-	rows, err := tx.QueryContext(ctx, query, params...)
+	rows, err := database.DbInstance.QueryContext(ctx, query, params...)
 	if err != nil {
 		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		log.Printf("Error eksekusi query SQL: %v. Query: %s", err, query)
 		return result, fmt.Errorf("gagal mengeksekusi query SQL (Pastikan syntax Oracle 10g valid)")
 	}
 	defer rows.Close()
+
 
 	columns, err := rows.Columns()
 	if err != nil {

@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 
 	config "go-bank-api/config"
 	"go-bank-api/constants"
@@ -29,12 +29,8 @@ var (
 	sqlChainService *SQLChainService
 )
 
-type IntentResponse struct {
-	Category string `json:"category"`
-	Reason   string `json:"reason"`
-}
-
 func InitVectorService() error {
+
 	if config.AppConfig == nil {
 		err := fmt.Errorf("konfigurasi aplikasi belum dimuat")
 		log.Println("[ai][ai_service][InitVectorService] error:", err)
@@ -167,6 +163,29 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return models.AISqlResponse{}, err
 	}
 
+	ctx := context.Background()
+
+	// 1. FAST PATH: Check Semantic Cache First (Skip LLM Intent classification on cache hit)
+	log.Println("Menerjemahkan prompt user ke vektor...")
+	promptVector, err := GenerateEmbedding(userPrompt)
+	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
+		return models.AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
+	}
+
+	hardHit, softCacheContext, err := CheckSemanticCache(ctx, promptVector)
+	if err != nil {
+		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
+		log.Printf("PERINGATAN: Gagal akses cache: %v", err)
+	}
+	if hardHit != nil {
+		hardHit.PromptAsli = userPrompt
+		hardHit.Vector = promptVector
+		hardHit.IsCached = true
+		return *hardHit, nil
+	}
+
+	// 2. SLOW PATH (Cache Miss): Classify Intent & Execute RAG
 	intent, _ := ClassifyIntent(userPrompt)
 
 	if intent == constants.IntentChat {
@@ -183,29 +202,12 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		}
 	}
 
-	ctx := context.Background()
-
-	log.Println("Menerjemahkan prompt user ke vektor...")
-	promptVector, err := GenerateEmbedding(userPrompt)
-	if err != nil {
-		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-		return models.AISqlResponse{}, fmt.Errorf("gagal embed prompt user: %w", err)
-	}
-
-	hardHit, softCacheContext, err := CheckSemanticCache(ctx, promptVector)
-	if err != nil {
-		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
-		log.Printf("PERINGATAN: Gagal akses cache: %v", err)
-	}
-	if hardHit != nil {
-		return *hardHit, nil
-	}
-
 	ragCtx, err := retrieveRAGContext(ctx, promptVector)
 	if err != nil {
 		log.Println("[ai][ai_service][GetSQLWithModel] error:", err)
 		return models.AISqlResponse{}, err
 	}
+
 
 	finalPrompt := buildFinalPrompt(userPrompt, ragCtx.DDL, ragCtx.RefData, ragCtx.BusinessDict, ragCtx.SQLContext, softCacheContext)
 
@@ -681,52 +683,8 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 	return sb.String(), nil
 }
 
-func ClassifyIntent(userInput string) (string, error) {
-	systemPrompt := `
-Anda adalah AI Router (Resepsionis) untuk Sistem Database Bank. 
-Tugas Anda HANYA mengklasifikasikan input user ke dalam 3 kategori:
-
-1. "SQL": Jika user meminta data bank, nasabah, rekening, transaksi, saldo,umur nasabah atau laporan.
-2. "CHAT": Jika user hanya menyapa (halo, selamat pagi), bertanya identitas bot, atau berterima kasih.
-3. "OFF_TOPIC": Jika user bertanya hal di luar perbankan (misal: resep masakan, politik, coding, curhat).
-
-CONTOH:
-- "Tampilkan nasabah saldo tertinggi" -> {"category": "SQL"}
-- "Halo apa kabar" -> {"category": "CHAT"}
-- "Cara masak rendang" -> {"category": "OFF_TOPIC"}
-- "Siapa kamu?" -> {"category": "CHAT"}
-- "Total tabungan Budi" -> {"category": "SQL"}
-
-Input User: "%s"
-
-JAWAB HANYA DENGAN FORMAT JSON VALID: {"category": "..."}
-`
-	finalPrompt := fmt.Sprintf(systemPrompt, userInput)
-	opts := GroqOptions{
-		Temperature: 0.1,
-		TopP:        0.5,
-	}
-	rawResponse, err := callGroqAPI(finalPrompt, constants.GroqModelFast, opts)
-	if err != nil {
-		log.Println("[ai][ai_service][ClassifyIntent] error:", err)
-		return constants.IntentSQL, nil
-	}
-	var result IntentResponse
-	cleanJSON := strings.TrimSpace(rawResponse)
-	cleanJSON = strings.ReplaceAll(cleanJSON, "```json", "")
-	cleanJSON = strings.ReplaceAll(cleanJSON, "```", "")
-
-	if err := json.Unmarshal([]byte(cleanJSON), &result); err != nil {
-		log.Println("[ai][ai_service][ClassifyIntent] error:", err)
-		log.Printf("⚠️ Gagal parse intent JSON: %v. Raw: %s", err, rawResponse)
-		return constants.IntentSQL, nil
-	}
-
-	log.Printf("ROUTER DECISION: [%s] untuk input '%s'", result.Category, userInput)
-	return result.Category, nil
-}
-
 func GenerateInsightStream(ctx context.Context, promptAsli string, tableData QueryResult, modelName string, chunkChan chan<- string, errChan chan<- error) {
+
 	var sb strings.Builder
 
 	sb.WriteString("| ")
