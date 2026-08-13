@@ -1,10 +1,13 @@
 package middleware
 
 import (
-	"go-bank-api/utils"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"go-bank-api/utils"
 )
 
 // RateLimiter implements a simple token bucket rate limiter
@@ -98,13 +101,44 @@ func (rl *RateLimiter) cleanupVisitors() {
 	}
 }
 
+// ExtractClientIP accurately extracts the client's IP address by inspecting
+// standard proxy headers (X-Forwarded-For, X-Real-IP) and stripping ephemeral ports.
+func ExtractClientIP(r *http.Request) string {
+	// 1. Check X-Forwarded-For header
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
+		if len(ips) > 0 {
+			ip := strings.TrimSpace(ips[0])
+			if ip != "" {
+				return ip
+			}
+		}
+	}
+
+	// 2. Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		ip := strings.TrimSpace(xri)
+		if ip != "" {
+			return ip
+		}
+	}
+
+	// 3. Fallback to RemoteAddr (strip ephemeral port)
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+
+	return r.RemoteAddr
+}
+
 // RateLimitMiddleware creates a middleware that limits requests per IP
 func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := NewRateLimiter(rate, window)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
+			ip := ExtractClientIP(r)
 
 			if !limiter.allow(ip) {
 				utils.SendError(w, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", 
@@ -116,4 +150,5 @@ func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http
 		})
 	}
 }
+
 

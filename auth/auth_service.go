@@ -2,10 +2,11 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
+
 
 
 type User struct {
@@ -292,12 +294,17 @@ func GenerateOTP(username, defaultPassword string) (string, error) {
 		return "", err
 	}
 
-	// 1. Generate 6 digit Code
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	otpCode := fmt.Sprintf("%06d", rng.Intn(1000000))
+	// 1. Generate 6 digit Code using CSPRNG
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		log.Println("[auth][auth_service][GenerateOTP] error:", err)
+		return "", fmt.Errorf("gagal membuat kode OTP aman: %w", err)
+	}
+	otpCode := fmt.Sprintf("%06d", n.Int64())
 
 	// 2. Set Expiry (5 minutes)
 	expiry := time.Now().Add(5 * time.Minute)
+
 
 	// 3. Hash Default Password
 	hashed, err := HashPassword(defaultPassword)

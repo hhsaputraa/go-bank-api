@@ -154,10 +154,14 @@ func LoadConfig() (*Config, error) {
 	if len(cfg.AESKey) != 32 {
 		return nil, fmt.Errorf("AES_KEY harus 32 karakter (saat ini: %d)", len(cfg.AESKey))
 	}
+	if len(cfg.JWTSecret) < 16 {
+		return nil, fmt.Errorf("JWT_SECRET is required and must be at least 16 characters for secure token signing (current: %d)", len(cfg.JWTSecret))
+	}
 
 	AppConfig = cfg
 	return cfg, nil
 }
+
 
 // Helper functions to read environment variables with defaults
 

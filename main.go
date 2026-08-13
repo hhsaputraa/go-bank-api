@@ -56,8 +56,11 @@ func main() {
 
 	// Apply middleware chain
 	handler := middleware.LoggingMiddleware(
-		middleware.CORSMiddleware(mux),
+		middleware.SecurityHeadersMiddleware(
+			middleware.CORSMiddleware(mux),
+		),
 	)
+
 
 	// Create server with proper configuration
 	srv := &http.Server{
