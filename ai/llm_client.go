@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
@@ -49,33 +48,17 @@ type GroqOptions struct {
 	ReasoningFormat string
 }
 
-type embeddingCacheEntry struct {
-	vector    []float32
-	createdAt time.Time
-}
-
-var (
-	embeddingCache = make(map[string]embeddingCacheEntry)
-	embeddingMu    sync.RWMutex
-	maxCacheSize   = 1000
-)
-
 func GenerateEmbedding(text string) ([]float32, error) {
 	cleanText := strings.TrimSpace(text)
 	if cleanText == "" {
 		return nil, errors.New("teks embedding kosong")
 	}
 
-	// 1. Check in-memory cache
-	embeddingMu.RLock()
-	if entry, found := embeddingCache[cleanText]; found {
-		if time.Since(entry.createdAt) < 24*time.Hour {
-			embeddingMu.RUnlock()
-			log.Printf("EMBEDDING CACHE HIT (RAM): '%s'", cleanText)
-			return entry.vector, nil
-		}
+	// 1. Check in-memory L1 cache (0ms)
+	if cachedVec, ok := GetCachedEmbedding(cleanText); ok {
+		log.Printf("EMBEDDING CACHE HIT (RAM): '%s'", cleanText)
+		return cachedVec, nil
 	}
-	embeddingMu.RUnlock()
 
 	// 2. Fetch from Google AI Embedder if cache miss
 	if geminiEmbedder == nil {
@@ -96,21 +79,8 @@ func GenerateEmbedding(text string) ([]float32, error) {
 		vec = vec[:targetSize]
 	}
 
-	// 3. Store in cache (bounded eviction if size >= 1000)
-	embeddingMu.Lock()
-	if len(embeddingCache) >= maxCacheSize {
-		for k := range embeddingCache {
-			delete(embeddingCache, k)
-			if len(embeddingCache) < maxCacheSize-200 {
-				break
-			}
-		}
-	}
-	embeddingCache[cleanText] = embeddingCacheEntry{
-		vector:    vec,
-		createdAt: time.Now(),
-	}
-	embeddingMu.Unlock()
+	// 3. Store in L1 cache
+	PutCachedEmbedding(cleanText, vec)
 
 	return vec, nil
 }

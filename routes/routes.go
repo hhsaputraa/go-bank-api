@@ -2,9 +2,11 @@ package routes
 
 import (
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	auth "go-bank-api/auth"
+	config "go-bank-api/config"
 	controllers "go-bank-api/controllers"
 	"go-bank-api/middleware"
 	users "go-bank-api/modules/users"
@@ -45,4 +47,23 @@ func RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/admin/qdrant/delete", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminDeleteQdrant)))
 	mux.Handle("/admin/cache/create", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminCacheCreate)))
 	mux.Handle("/admin/qdrant/update", adminRateLimiter(auth.AdminMiddleware(controllers.HandleAdminQdrantUpdate)))
+
+	// Observability & Profiling (pprof) - Accessible in development or by admin
+	registerPprofRoutes(mux)
+}
+
+func registerPprofRoutes(mux *http.ServeMux) {
+	// In production, guard pprof behind AdminMiddleware; in development, allow direct access
+	wrapPprof := func(h http.HandlerFunc) http.Handler {
+		if config.AppConfig != nil && config.AppConfig.AppEnv == "production" {
+			return auth.AdminMiddleware(h)
+		}
+		return h
+	}
+
+	mux.Handle("/debug/pprof/", wrapPprof(pprof.Index))
+	mux.Handle("/debug/pprof/cmdline", wrapPprof(pprof.Cmdline))
+	mux.Handle("/debug/pprof/profile", wrapPprof(pprof.Profile))
+	mux.Handle("/debug/pprof/symbol", wrapPprof(pprof.Symbol))
+	mux.Handle("/debug/pprof/trace", wrapPprof(pprof.Trace))
 }

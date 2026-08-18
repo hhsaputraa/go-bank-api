@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	config "go-bank-api/config"
 	constants "go-bank-api/constants"
@@ -15,7 +17,87 @@ import (
 	jwt "github.com/golang-jwt/jwt/v5"
 )
 
-// AuthMiddleware validates JWT tokens and checks session validity from cookie or Bearer header
+type sessionCacheItem struct {
+	validUntil time.Time
+	isValid    bool
+}
+
+var (
+	sessionCache      sync.Map
+	sessionCacheTTL   = 60 * time.Second
+	cleanupSessionOnce sync.Once
+)
+
+func initSessionCleaner() {
+	cleanupSessionOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(2 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				now := time.Now()
+				sessionCache.Range(func(key, value interface{}) bool {
+					item := value.(sessionCacheItem)
+					if now.After(item.validUntil) {
+						sessionCache.Delete(key)
+					}
+					return true
+				})
+			}
+		}()
+	})
+}
+
+// InvalidateSessionToken removes a specific token from the in-memory session cache (e.g. on logout)
+func InvalidateSessionToken(tokenString string) {
+	sessionCache.Delete(tokenString)
+}
+
+// InvalidateAllSessions clears all cached sessions (e.g. on mass password reset or admin actions)
+func InvalidateAllSessions() {
+	sessionCache.Range(func(key, value interface{}) bool {
+		sessionCache.Delete(key)
+		return true
+	})
+}
+
+// isSessionValid checks the session validity with L1 In-Memory Caching to avoid DB roundtrips on every request
+func isSessionValid(ctx context.Context, tokenString string) (bool, error) {
+	initSessionCleaner()
+
+	// 1. Check L1 Memory Cache
+	if val, ok := sessionCache.Load(tokenString); ok {
+		item := val.(sessionCacheItem)
+		if time.Now().Before(item.validUntil) {
+			return item.isValid, nil
+		}
+		// Expired cache item
+		sessionCache.Delete(tokenString)
+	}
+
+	if database.DbInstance == nil {
+		return true, nil
+	}
+
+	// 2. Query Oracle DB (L2 check)
+	var exists int
+	checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP"
+	err := database.DbInstance.QueryRowContext(ctx, checkQuery, tokenString).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	isValid := exists > 0
+
+	// 3. Store in L1 Cache
+	sessionCache.Store(tokenString, sessionCacheItem{
+		validUntil: time.Now().Add(sessionCacheTTL),
+		isValid:    isValid,
+	})
+
+	return isValid, nil
+}
+
+// AuthMiddleware validates JWT tokens and checks session validity with L1 cache
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var tokenString string
@@ -64,21 +146,17 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if database.DbInstance != nil {
-			var exists int
-			checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP"
-			err := database.DbInstance.QueryRowContext(r.Context(), checkQuery, tokenString).Scan(&exists)
+		// Fast session validation via L1 In-Memory Cache
+		validSession, dbErr := isSessionValid(r.Context(), tokenString)
+		if dbErr != nil {
+			log.Printf("[middleware][AuthMiddleware] DB Session Error: %v", dbErr)
+			utils.SendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
+			return
+		}
 
-			if err != nil {
-				log.Printf("[middleware][AuthMiddleware] DB Session Error: %v", err)
-				utils.SendError(w, http.StatusUnauthorized, "SESSION_ERROR", "Gagal memvalidasi sesi")
-				return
-			}
-
-			if exists == 0 {
-				utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeSessionExpired, "Sesi berakhir")
-				return
-			}
+		if !validSession {
+			utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeSessionExpired, "Sesi berakhir")
+			return
 		}
 
 		ctx := context.WithValue(r.Context(), constants.ContextKeyUserID, claims["user_id"])

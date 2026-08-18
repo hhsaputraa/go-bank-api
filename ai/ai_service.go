@@ -165,7 +165,13 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 
 	ctx := context.Background()
 
-	// 1. FAST PATH: Check Semantic Cache First (Skip LLM Intent classification on cache hit)
+	// 0. ULTRA-FAST PATH: Check L1 RAM Query Cache (0ms latency, zero network I/O)
+	if cachedResp, ok := GetL1QueryCache(userPrompt); ok {
+		log.Printf("[INFO] L1 RAM QUERY CACHE HIT (0ms): '%s'", userPrompt)
+		return *cachedResp, nil
+	}
+
+	// 1. FAST PATH: Check Semantic Cache (Embeddings + Qdrant Vector Search)
 	log.Println("Menerjemahkan prompt user ke vektor...")
 	promptVector, err := GenerateEmbedding(userPrompt)
 	if err != nil {
@@ -182,6 +188,8 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		hardHit.PromptAsli = userPrompt
 		hardHit.Vector = promptVector
 		hardHit.IsCached = true
+		// Store in L1 RAM cache for immediate future lookups
+		PutL1QueryCache(userPrompt, *hardHit)
 		return *hardHit, nil
 	}
 

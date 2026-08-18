@@ -10,10 +10,9 @@ import (
 	"go-bank-api/utils"
 )
 
-// RateLimiter implements a simple token bucket rate limiter
+// RateLimiter implements a lock-free map token bucket rate limiter
 type RateLimiter struct {
-	visitors map[string]*visitor
-	mu       sync.RWMutex
+	visitors sync.Map
 	rate     int           // requests per window
 	window   time.Duration // time window
 }
@@ -24,37 +23,32 @@ type visitor struct {
 	mu       sync.Mutex
 }
 
-// NewRateLimiter creates a new rate limiter
-// rate: number of requests allowed per window
-// window: time window duration
+// NewRateLimiter creates a new rate limiter with concurrent-safe sync.Map
 func NewRateLimiter(rate int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
-		visitors: make(map[string]*visitor),
-		rate:     rate,
-		window:   window,
+		rate:   rate,
+		window: window,
 	}
 
-	// Cleanup old visitors every minute
+	// Cleanup old visitors periodically to prevent memory leaks
 	go rl.cleanupVisitors()
 
 	return rl
 }
 
-// getVisitor returns the visitor for the given IP
+// getVisitor returns or creates the visitor for the given IP without global map lock
 func (rl *RateLimiter) getVisitor(ip string) *visitor {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	v, exists := rl.visitors[ip]
-	if !exists {
-		v = &visitor{
-			lastSeen: time.Now(),
-			tokens:   rl.rate,
-		}
-		rl.visitors[ip] = v
+	if val, ok := rl.visitors.Load(ip); ok {
+		return val.(*visitor)
 	}
 
-	return v
+	v := &visitor{
+		lastSeen: time.Now(),
+		tokens:   rl.rate,
+	}
+
+	actual, _ := rl.visitors.LoadOrStore(ip, v)
+	return actual.(*visitor)
 }
 
 // allow checks if the request should be allowed
@@ -63,10 +57,9 @@ func (rl *RateLimiter) allow(ip string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// Refill tokens based on time passed
 	now := time.Now()
 	elapsed := now.Sub(v.lastSeen)
-	
+
 	if elapsed >= rl.window {
 		v.tokens = rl.rate
 		v.lastSeen = now
@@ -81,23 +74,24 @@ func (rl *RateLimiter) allow(ip string) bool {
 	return false
 }
 
-// cleanupVisitors removes old visitors to prevent memory leak
+// cleanupVisitors removes idle visitors without stopping concurrent requests
 func (rl *RateLimiter) cleanupVisitors() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		rl.mu.Lock()
-		for ip, v := range rl.visitors {
-			func(ip string, v *visitor) {
-				v.mu.Lock()
-				defer v.mu.Unlock()
-				if time.Since(v.lastSeen) > 3*time.Minute {
-					delete(rl.visitors, ip)
-				}
-			}(ip, v)
-		}
-		rl.mu.Unlock()
+		now := time.Now()
+		rl.visitors.Range(func(key, value interface{}) bool {
+			v := value.(*visitor)
+			v.mu.Lock()
+			stale := now.Sub(v.lastSeen) > 3*time.Minute
+			v.mu.Unlock()
+
+			if stale {
+				rl.visitors.Delete(key)
+			}
+			return true
+		})
 	}
 }
 
@@ -141,7 +135,7 @@ func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http
 			ip := ExtractClientIP(r)
 
 			if !limiter.allow(ip) {
-				utils.SendError(w, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", 
+				utils.SendError(w, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED",
 					"Terlalu banyak permintaan. Silakan coba lagi nanti.")
 				return
 			}
@@ -150,5 +144,3 @@ func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http
 		})
 	}
 }
-
-

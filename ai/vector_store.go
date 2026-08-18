@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	config "go-bank-api/config"
+	models "go-bank-api/models"
 	"io"
 	"log"
 	"net/http"
@@ -297,6 +298,9 @@ func SubmitAsyncTask(task func()) {
 }
 
 func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
+	// Store in L1 RAM cache immediately
+	PutL1QueryCache(promptAsli, models.AISqlResponse{SQL: sqlQuery, IsCached: true})
+
 	SubmitAsyncTask(func() {
 		if config.AppConfig == nil {
 			return
@@ -316,6 +320,7 @@ func SaveToCache(promptAsli string, promptVector []float32, sqlQuery string) {
 }
 
 func ManualInjectCache(promptAsli string, sqlQuery string) error {
+	PutL1QueryCache(promptAsli, models.AISqlResponse{SQL: sqlQuery, IsCached: true})
 	vec, err := GenerateEmbedding(promptAsli)
 	if err != nil {
 		return err

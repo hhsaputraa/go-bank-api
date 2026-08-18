@@ -192,11 +192,13 @@ func parseAndValidateRequest(w http.ResponseWriter, r *http.Request) (string, st
 		utils.SendError(w, http.StatusMethodNotAllowed, constants.ErrCodeMethodNotAllowed, "Metode HTTP tidak diizinkan")
 		return "", "", false
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB body limit
 	var req models.PromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, constants.ErrCodeInvalidJSON, "Format JSON tidak valid")
 		return "", "", false
 	}
+
 
 	normalizedPrompt := strings.ToLower(strings.TrimSpace(req.Prompt))
 	if normalizedPrompt == "" {

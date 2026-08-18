@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	ai "go-bank-api/ai"
 	models "go-bank-api/models"
@@ -30,7 +31,13 @@ func HandleUploadSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.ParseMultipartForm(10 << 20) // 10 MB limit
+	// Enforce 10 MB max body size on multipart uploads
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		utils.WriteError(w, http.StatusBadRequest, "Ukuran file melebihi batas 10 MB", "PAYLOAD_TOO_LARGE")
+		return
+	}
 	file, handler, err := r.FormFile("file")
 	if err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Gagal membaca file dari request", err.Error())
@@ -38,8 +45,21 @@ func HandleUploadSession(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	// Server-side Extension Allowlist Check
+	ext := strings.ToLower(filepath.Ext(handler.Filename))
+	allowedExtensions := map[string]bool{
+		".csv":  true,
+		".xlsx": true,
+		".xls":  true,
+		".json": true,
+		".pdf":  true,
+	}
+	if !allowedExtensions[ext] {
+		utils.WriteError(w, http.StatusBadRequest, "Format file tidak diizinkan. Hanya .csv, .xlsx, .xls, .json, .pdf yang didukung.", "INVALID_FILE_TYPE")
+		return
+	}
+
 	sessionID := uuid.New().String()
-	ext := filepath.Ext(handler.Filename)
 	targetPath := filepath.Join(uploadsDir, fmt.Sprintf("session_%s%s", sessionID, ext))
 
 	out, err := os.Create(targetPath)
@@ -70,11 +90,15 @@ func HandleChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound JSON payload size
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	var req models.ChatSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.WriteError(w, http.StatusBadRequest, "Request body JSON tidak valid", err.Error())
 		return
 	}
+
 
 	// Locate file
 	var filePath string

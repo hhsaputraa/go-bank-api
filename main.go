@@ -57,7 +57,9 @@ func main() {
 	// Apply middleware chain
 	handler := middleware.LoggingMiddleware(
 		middleware.SecurityHeadersMiddleware(
-			middleware.CORSMiddleware(mux),
+			middleware.CORSMiddleware(
+				middleware.CompressionMiddleware(mux),
+			),
 		),
 	)
 

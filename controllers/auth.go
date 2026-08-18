@@ -22,6 +22,7 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB body limit
 	var req auth.RegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
@@ -54,6 +55,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB body limit
 	var req auth.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
@@ -83,7 +85,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		utils.SendError(w, http.StatusUnauthorized, constants.ErrCodeLoginFailed, err.Error())
 		return
 	}
-	isProduction := config.AppConfig.AppEnv == "priduction"
+	isProduction := config.AppConfig.AppEnv == "production"
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
@@ -114,6 +116,7 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB body limit
 	var req struct {
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
@@ -122,6 +125,7 @@ func HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
 		return
 	}
+
 
 	plainOld, err := utils.DecryptField(req.OldPassword)
 	if err != nil {
@@ -259,6 +263,7 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB body limit
 	var req struct {
 		Username string `json:"username"`
 		OTP      string `json:"otp"`
@@ -267,6 +272,7 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 		utils.SendError(w, http.StatusBadRequest, "INVALID_BODY", "Format JSON salah")
 		return
 	}
+
 
 	plainUsername, err := utils.DecryptField(req.Username)
 	if err != nil {

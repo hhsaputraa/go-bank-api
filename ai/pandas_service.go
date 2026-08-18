@@ -3,6 +3,7 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	config "go-bank-api/config"
 )
+
 
 type OpenAIRequestMessage struct {
 	Role    string `json:"role"`
@@ -205,13 +207,15 @@ func ExecutePandasWithRetry(absFilePath string, initialCode string, userPrompt s
 	runnerDir := GetPythonRunnerDir()
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		cmd := exec.Command("python", "query_runner.py", absFilePath, currentCode)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cmd := exec.CommandContext(ctx, "python", "query_runner.py", absFilePath, currentCode)
 		cmd.Dir = runnerDir
 		var stdoutBuf, stderrBuf bytes.Buffer
 		cmd.Stdout = &stdoutBuf
 		cmd.Stderr = &stderrBuf
 
 		err := cmd.Run()
+		cancel()
 		var runnerOut RunnerOutput
 		jsonErr := json.Unmarshal(stdoutBuf.Bytes(), &runnerOut)
 
@@ -259,13 +263,17 @@ Aturan:
 // GetDataFrameInfo runs python query_runner.py --info to inspect dataframe schema
 func GetDataFrameInfo(absFilePath string, cols []string) string {
 	runnerDir := GetPythonRunnerDir()
-	infoCmd := exec.Command("python", "query_runner.py", absFilePath, "--info")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	infoCmd := exec.CommandContext(ctx, "python", "query_runner.py", absFilePath, "--info")
 	infoCmd.Dir = runnerDir
 	var infoStdout, infoStderr bytes.Buffer
 	infoCmd.Stdout = &infoStdout
 	infoCmd.Stderr = &infoStderr
 
 	if err := infoCmd.Run(); err != nil {
+
 		log.Printf("Warning: Gagal mengambil info DataFrame: %v | stderr: %s", err, infoStderr.String())
 		return fmt.Sprintf("Kolom: %v", cols)
 	}

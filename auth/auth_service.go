@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
+
 
 
 
@@ -257,10 +259,15 @@ func ChangePassword(userID int64, oldPassword, newPassword string) error {
 		return fmt.Errorf("gagal update password: %w", err)
 	}
 
-	// 5. Invalidate sessions (Optional: Force logout other devices)
-	// _, _ = database.DbInstance.Exec("DELETE FROM user_sessions WHERE id_app_users = :1", userID)
+	// 5. Invalidate sessions across all devices for security
+	middleware.InvalidateAllSessions()
+	_, err = database.DbInstance.ExecContext(context.Background(), "DELETE FROM user_sessions WHERE id_app_users = :1", userID)
+	if err != nil {
+		log.Printf("[auth][auth_service][ChangePassword] warning: gagal hapus sesi lama: %v", err)
+	}
 
 	return nil
+
 }
 
 // AuthMiddleware delegates to middleware.AuthMiddleware
@@ -275,6 +282,7 @@ func AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 
 func LogoutUser(tokenString string) error {
+	middleware.InvalidateSessionToken(tokenString)
 	if database.DbInstance == nil {
 		return nil
 	}
@@ -379,10 +387,11 @@ func LoginWithOTP(username, otp, userAgent, ipAddress string) (string, int, erro
 		}
 	}
 
-	// 2. Validate OTP
-	if dbOTP == "" || dbOTP != otp {
+	// 2. Validate OTP with constant-time comparison to prevent timing attacks
+	if dbOTP == "" || subtle.ConstantTimeCompare([]byte(dbOTP), []byte(otp)) != 1 {
 		return "", 0, errors.New("kode OTP tidak sama")
 	}
+
 
 	// 3. Validate Expiry
 	if time.Now().After(otpExpiredAt) {

@@ -15,6 +15,11 @@ type QueryResult struct {
 	Rows    [][]interface{} `json:"rows"`
 }
 
+const (
+	// DefaultMaxQueryRows prevents OOM on unbounded queries
+	DefaultMaxQueryRows = 5000
+)
+
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
 	var result QueryResult
 
@@ -62,20 +67,29 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 	}
 	defer rows.Close()
 
-
 	columns, err := rows.Columns()
 	if err != nil {
 		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		return result, fmt.Errorf("gagal membaca kolom: %w", err)
 	}
+	colCount := len(columns)
 	result.Columns = columns
-	result.Rows = make([][]interface{}, 0)
 
+	// Preallocate rows capacity for fast appends and reduced slice growth allocations
+	result.Rows = make([][]interface{}, 0, 64)
+
+	// Allocate scanner pointers slice once per query execution
+	rowScanners := make([]interface{}, colCount)
+
+	rowCount := 0
 	for rows.Next() {
-		rowValues := make([]interface{}, len(columns))
-		rowScanners := make([]interface{}, len(columns))
+		if rowCount >= DefaultMaxQueryRows {
+			log.Printf("[ai][logic] Query cap reached (%d rows). Truncating result to preserve memory.", DefaultMaxQueryRows)
+			break
+		}
 
-		for i := range rowValues {
+		rowValues := make([]interface{}, colCount)
+		for i := 0; i < colCount; i++ {
 			rowScanners[i] = &rowValues[i]
 		}
 
@@ -91,6 +105,7 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 		}
 
 		result.Rows = append(result.Rows, rowValues)
+		rowCount++
 	}
 
 	if err = rows.Err(); err != nil {
