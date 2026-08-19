@@ -5,17 +5,23 @@ import (
 	"fmt"
 	"go-bank-api/constants"
 	"go-bank-api/database"
-	"go-bank-api/utils"
 	"log"
 	"time"
 )
 
-func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
+func GetAllUsersOracleDB(ctx context.Context) ([]UserResponseModel, bool, error) {
 	if database.DbInstance == nil {
 		return nil, false, fmt.Errorf("database belum terkoneksi")
 	}
 
-	var datas []UserResponseModel
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	datas := make([]UserResponseModel, 0, 32)
 
 	query := `
 		SELECT id_app_users, username, full_name, email, is_admin, is_active, account_status, last_login_at, otp_code, otp_expired_at
@@ -23,7 +29,7 @@ func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
 		ORDER BY id_app_users ASC
 	`
 
-	rows, err := database.DbInstance.QueryContext(context.Background(), query)
+	rows, err := database.DbInstance.QueryContext(queryCtx, query)
 	if err != nil {
 		log.Println("[modules][users][resource_db][GetAllUsersOracleDB] error on query", err.Error())
 		return datas, false, err
@@ -47,8 +53,8 @@ func GetAllUsersOracleDB() ([]UserResponseModel, bool, error) {
 			continue
 		}
 
-		u.Is_admin = (utils.InterfaceToInt(isAdminInt) == constants.AdminRoleValue)
-		u.Is_active = (utils.InterfaceToInt(isActiveInt) == constants.ActiveUserStatus)
+		u.Is_admin = (isAdminInt == constants.AdminRoleValue)
+		u.Is_active = (isActiveInt == constants.ActiveUserStatus)
 		u.Account_status = accountStatus
 
 		if lastLoginRaw != nil {

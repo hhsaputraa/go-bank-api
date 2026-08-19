@@ -39,6 +39,15 @@ type OpenAIResponse struct {
 	Choices []OpenAIResponseChoice `json:"choices"`
 }
 
+var pandasHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        50,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 // CallOpenAILLM executes chat completion against OpenAI-compatible LLM endpoint
 func CallOpenAILLM(systemPrompt, userPrompt string) (string, error) {
 	if config.AppConfig == nil {
@@ -64,8 +73,7 @@ func CallOpenAILLM(systemPrompt, userPrompt string) (string, error) {
 		req.Header.Set("Authorization", "Bearer "+config.AppConfig.LLMAPIKey)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := pandasHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}

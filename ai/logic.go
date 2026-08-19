@@ -21,6 +21,10 @@ const (
 )
 
 func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error) {
+	return ExecuteDynamicQueryContext(context.Background(), query, params)
+}
+
+func ExecuteDynamicQueryContext(ctx context.Context, query string, params []interface{}) (QueryResult, error) {
 	var result QueryResult
 
 	checkQuery := strings.ToUpper(query)
@@ -56,10 +60,14 @@ func ExecuteDynamicQuery(query string, params []interface{}) (QueryResult, error
 		timeout = config.AppConfig.QueryTimeout
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	rows, err := database.DbInstance.QueryContext(ctx, query, params...)
+	rows, err := database.DbInstance.QueryContext(execCtx, query, params...)
 	if err != nil {
 		log.Println("[ai][logic][ExecuteDynamicQuery] error:", err)
 		log.Printf("Error eksekusi query SQL: %v. Query: %s", err, query)

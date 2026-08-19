@@ -10,27 +10,32 @@ Dokumentasi lengkap semua fungsi dalam sistem, dikelompokkan berdasarkan file/mo
 ## 📋 Daftar Isi
 
 ### Core Modules
+
 1. [config.go - Configuration Management](#configgo---configuration-management)
 2. [constants.go - Constants & Magic Numbers](#constantsgo---constants--magic-numbers) ✨ NEW
 3. [database.go - Database Connection](#databasego---database-connection)
 4. [main.go - Application Entry Point](#maingo---application-entry-point)
 
 ### Middleware (NEW)
+
 5. [middleware/cors.go - CORS Handling](#middlewarecorsgo---cors-handling) ✨ NEW
 6. [middleware/logging.go - HTTP Logging](#middlewarelogginggo---http-logging) ✨ NEW
 7. [middleware/ratelimit.go - Rate Limiting](#middlewareratelimitgo---rate-limiting) ✨ NEW
 
 ### HTTP Layer
+
 8. [routes.go - HTTP Routing](#routesgo---http-routing)
-9. [controllers/*.go - HTTP Handlers](#controllersgo---http-handlers)
+9. [controllers/\*.go - HTTP Handlers](#controllersgo---http-handlers)
 
 ### Business Logic
+
 10. [ai/logic.go - Business Logic](#ailogicgo---business-logic)
 11. [ai/ai_service.go - AI & Vector Services](#aiai_servicego---ai--vector-services)
 12. [ai/schema_service.go - Schema Management](#aischema_servicego---schema-management)
 13. [ai/train.go - Training Module](#aitraingo---training-module)
 
 ### Authentication
+
 14. [auth/auth_service.go - Authentication](#authauth_servicego---authentication) ✨ NEW
 
 ---
@@ -211,6 +216,7 @@ const (
 ```
 
 **Penggunaan**:
+
 ```go
 // Before (BAD - magic number)
 if isAdmin == 7 {
@@ -309,6 +315,7 @@ if isAdmin == constants.AdminRoleValue {
 ```
 
 **Graceful Shutdown**:
+
 - Listen untuk SIGINT (Ctrl+C) dan SIGTERM
 - Shutdown dengan timeout 30 detik
 - Wait untuk in-flight requests selesai
@@ -325,12 +332,14 @@ if isAdmin == constants.AdminRoleValue {
 **Tujuan**: Centralized CORS handling untuk semua HTTP requests
 
 **Features**:
+
 - Multi-origin support (comma-separated di config)
 - Automatic origin validation
 - Credentials support
 - Preflight request handling (OPTIONS)
 
 **Flow**:
+
 1. Extract `Origin` header dari request
 2. Get allowed origins dari config (`FRONTEND_URL`)
 3. Validate apakah origin diizinkan
@@ -338,6 +347,7 @@ if isAdmin == constants.AdminRoleValue {
 5. Handle preflight (OPTIONS) atau forward ke next handler
 
 **CORS Headers**:
+
 ```
 Access-Control-Allow-Origin: <origin>
 Access-Control-Allow-Credentials: true
@@ -347,6 +357,7 @@ Access-Control-Max-Age: 3600
 ```
 
 **Contoh Config**:
+
 ```bash
 # Single origin
 FRONTEND_URL=http://localhost:5173
@@ -364,6 +375,7 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 **Return**: Array of allowed origin URLs
 
 **Logic**:
+
 - Split `FrontendURL` by comma
 - Trim whitespace dari setiap origin
 - Return default `["http://localhost:5173"]` jika config kosong
@@ -375,6 +387,7 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 **Tujuan**: Validate apakah origin diizinkan
 
 **Parameters**:
+
 - `origin`: Origin dari request header
 - `allowedOrigins`: List of allowed origins
 
@@ -391,11 +404,13 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 **Tujuan**: Log semua HTTP requests dengan timing information
 
 **Log Format**:
+
 ```
 [HTTP] <METHOD> <PATH> | Status: <CODE> | Duration: <TIME> | IP: <IP> | UA: <USER_AGENT>
 ```
 
 **Contoh Output**:
+
 ```
 [HTTP] POST /api/query | Status: 200 | Duration: 1.234s | IP: 127.0.0.1 | UA: curl/7.68.0
 [HTTP] GET /health | Status: 200 | Duration: 1.234ms | IP: ::1 | UA: Mozilla/5.0
@@ -403,6 +418,7 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 ```
 
 **Tracked Metrics**:
+
 - HTTP Method
 - Request Path
 - Response Status Code
@@ -421,12 +437,14 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 **Tujuan**: Create rate limiter dengan token bucket algorithm
 
 **Parameters**:
+
 - `rate`: Number of requests allowed per window
 - `window`: Time window duration
 
 **Return**: `*RateLimiter` instance
 
 **Features**:
+
 - Per-IP tracking
 - Token bucket algorithm
 - Automatic cleanup (prevent memory leak)
@@ -438,10 +456,12 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 **Tujuan**: Create middleware untuk rate limiting
 
 **Parameters**:
+
 - `rate`: Requests per window (e.g., 10)
 - `window`: Time window (e.g., 1 minute)
 
 **Response saat limit exceeded**:
+
 ```json
 {
   "error": "RATE_LIMIT_EXCEEDED",
@@ -450,6 +470,7 @@ FRONTEND_URL=http://localhost:3084,http://localhost:5173,https://app.com
 ```
 
 **Contoh Penggunaan**:
+
 ```go
 // Limit admin endpoint to 10 requests per minute
 rateLimitedAdmin := middleware.RateLimitMiddleware(10, 1*time.Minute)
@@ -467,25 +488,30 @@ mux.Handle("/admin/retrain", rateLimitedAdmin(http.HandlerFunc(HandleAdminRetrai
 **Tujuan**: Mendaftarkan semua HTTP endpoints ke router
 
 **Parameters**:
+
 - `mux`: HTTP ServeMux instance (tidak lagi menggunakan DefaultServeMux)
 
 **Endpoints yang didaftarkan**:
 
 **Public Routes**:
+
 - `GET /health` → `HandleHealthCheck`
 - `POST /api/auth/register` → `HandleRegister`
 - `POST /api/auth/login` → `HandleLogin`
 
 **Protected Routes** (dengan AuthMiddleware):
+
 - `POST /api/auth/logout` → `HandleLogout`
 - `GET /api/auth/me` → `HandleMe`
 - `POST /api/feedback/koreksi` → `HandleFeedbackKoreksi`
 
 **Query Routes**:
+
 - `POST /api/query` → `HandleDynamicQuery`
 - `POST /api/enhance` → `HandleEnhancePrompt`
 
 **Admin Routes** (dengan RateLimitMiddleware):
+
 - `POST /admin/retrain` → `HandleAdminRetrain` (10 req/min)
 - `GET /admin/qdrant/list` → `HandleAdminListQdrant`
 - `DELETE /admin/qdrant/delete` → `HandleAdminDeleteQdrant`
@@ -497,13 +523,14 @@ mux.Handle("/admin/retrain", rateLimitedAdmin(http.HandlerFunc(HandleAdminRetrai
 **Side Effects**: Register handlers ke provided ServeMux
 
 **Changes from v1.0**:
+
 - Sekarang menerima `*http.ServeMux` parameter
 - Rate limiting applied to admin endpoints
 - CORS tidak lagi di-handle per-route (sekarang di middleware)
 
 ---
 
-## controllers/*.go - HTTP Handlers
+## controllers/\*.go - HTTP Handlers
 
 > **Location**: `controllers/auth.go`, `controllers/query.go`, `controllers/admin.go`, `controllers/feedback.go`
 
@@ -908,7 +935,7 @@ Headers:
   - Content-Type: application/json
 Body:
   {
-    "model": "llama-3.1-8b-instant",
+    "model": "meta-llama/llama-prompt-guard-2-22m",
     "messages": [{"role": "user", "content": finalPrompt}]
   }
 Timeout: 30 seconds

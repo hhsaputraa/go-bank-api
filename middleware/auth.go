@@ -78,9 +78,9 @@ func isSessionValid(ctx context.Context, tokenString string) (bool, error) {
 		return true, nil
 	}
 
-	// 2. Query Oracle DB (L2 check)
+	// 2. Query Oracle DB (L2 check with STOPKEY optimization)
 	var exists int
-	checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP"
+	checkQuery := "SELECT COUNT(1) FROM user_sessions WHERE token = :1 AND expires_at > CURRENT_TIMESTAMP AND ROWNUM = 1"
 	err := database.DbInstance.QueryRowContext(ctx, checkQuery, tokenString).Scan(&exists)
 	if err != nil {
 		return false, err

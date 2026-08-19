@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"log"
 	"strings"
 
@@ -9,7 +10,12 @@ import (
 
 // ExecuteWithRetry executes SQL and attempts AI self-repair if initial execution fails.
 func ExecuteWithRetry(aiResp models.AISqlResponse) (QueryResult, string, error) {
-	data, execErr := ExecuteDynamicQuery(aiResp.SQL, nil)
+	return ExecuteWithRetryContext(context.Background(), aiResp)
+}
+
+// ExecuteWithRetryContext executes SQL with request context and attempts AI self-repair if initial execution fails.
+func ExecuteWithRetryContext(ctx context.Context, aiResp models.AISqlResponse) (QueryResult, string, error) {
+	data, execErr := ExecuteDynamicQueryContext(ctx, aiResp.SQL, nil)
 	fixedSQL := aiResp.SQL
 
 	if execErr != nil {
@@ -18,7 +24,7 @@ func ExecuteWithRetry(aiResp models.AISqlResponse) (QueryResult, string, error) 
 		repairedSQL, repairErr := RepairSQLFromAI(aiResp.PromptAsli, aiResp.SQL, execErr.Error())
 		if repairErr == nil {
 			log.Printf("🔄 Mencoba eksekusi SQL Perbaikan: %s", repairedSQL)
-			dataRetry, execErrRetry := ExecuteDynamicQuery(repairedSQL, nil)
+			dataRetry, execErrRetry := ExecuteDynamicQueryContext(ctx, repairedSQL, nil)
 
 			if execErrRetry == nil {
 				log.Println("Self-Correction Berhasil menyelamatkan request!")

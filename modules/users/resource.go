@@ -1,11 +1,12 @@
 package users
 
 import (
+	"context"
 	"log"
 )
 
-func GetAllUsersOracleUsecase() ([]UserResponseModel, bool, error) {
-	data, status, err := GetAllUsersOracleDB()
+func GetAllUsersOracleUsecase(ctx context.Context) ([]UserResponseModel, bool, error) {
+	data, status, err := GetAllUsersOracleDB(ctx)
 	if !status {
 		return data, status, err
 	}

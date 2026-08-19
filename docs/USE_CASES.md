@@ -76,7 +76,7 @@ GetDynamicSchemaContext()
 ```
 Groq API receives:
 {
-  "model": "llama-3.1-8b-instant",
+  "model": "meta-llama/llama-prompt-guard-2-22m",
   "messages": [{
     "role": "user",
     "content": "Anda adalah ahli SQL PostgreSQL...\n\n== KAMUS DATABASE ==\n...\n\n== CONTOH SQL ==\n...\n\nPertanyaan: \"tampilkan semua nasabah\""

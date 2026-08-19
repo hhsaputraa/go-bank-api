@@ -37,9 +37,10 @@ func SendError(w http.ResponseWriter, statusCode int, code, message string, deta
 	WriteJSON(w, statusCode, resp)
 }
 
+var validIdentifierPattern = regexp.MustCompile(`^[A-Z0-9_$#]+$`)
+
 func ValidateIdentifier(name string) error {
-	validPattern := regexp.MustCompile(`^[A-Z0-9_$#]+$`)
-	if !validPattern.MatchString(name) {
+	if !validIdentifierPattern.MatchString(name) {
 		return fmt.Errorf("invalid identifier detected: %s", name)
 	}
 	return nil

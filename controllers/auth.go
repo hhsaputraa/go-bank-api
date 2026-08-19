@@ -11,6 +11,7 @@ import (
 	config "go-bank-api/config"
 	"go-bank-api/constants"
 	database "go-bank-api/database"
+	"go-bank-api/middleware"
 	utils "go-bank-api/utils"
 )
 
@@ -78,7 +79,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Password = plainPassword
 	req.UserAgent = r.UserAgent()
-	req.IPAddress = r.RemoteAddr
+	req.IPAddress = middleware.ExtractClientIP(r)
 
 	token, mustChangePwd, err := auth.LoginUser(r.Context(), req)
 	if err != nil {
@@ -289,7 +290,7 @@ func HandleLoginOTP(w http.ResponseWriter, r *http.Request) {
 
 	req.Username = plainUsername
 	userAgent := r.UserAgent()
-	ipAddress := r.RemoteAddr
+	ipAddress := middleware.ExtractClientIP(r)
 
 	token, accountStatus, err := auth.LoginWithOTP(req.Username, req.OTP, userAgent, ipAddress)
 	if err != nil {

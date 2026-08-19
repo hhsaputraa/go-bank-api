@@ -304,7 +304,7 @@ HandleDynamicQuery()                     // handlers.go
   │           └─► [STEP 6: CALL LLM]
   │               │
   │               └─► HTTP POST to Groq API
-  │                   ├─► Model: llama-3.1-8b-instant
+  │                   ├─► Model: meta-llama/llama-prompt-guard-2-22m
   │                   ├─► Timeout: 30 seconds
   │                   └─► Returns: SQL query string
   │
@@ -427,7 +427,7 @@ HandleAdminRetrain()                     // handlers.go
 
 - **Groq**: LLM for SQL generation
   - Model: `qwen/qwen3.6-27b` (configurable)
-  - Fallback: `llama-3.1-8b-instant`
+  - Fallback: `meta-llama/llama-prompt-guard-2-22m`
   - API: OpenAI-compatible endpoint
 
 - **Ollama** (Optional): Local LLM fallback

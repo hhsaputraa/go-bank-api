@@ -12,13 +12,14 @@ import (
 	ai "go-bank-api/ai"
 	"go-bank-api/constants"
 	logger "go-bank-api/log"
+	"go-bank-api/middleware"
 	models "go-bank-api/models"
 	utils "go-bank-api/utils"
 )
 
 func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
-	clientIP := r.RemoteAddr
+	clientIP := middleware.ExtractClientIP(r)
 	// CORS is handled by global middleware
 
 	normalizedPrompt, selectedModel, ok := parseAndValidateRequest(w, r)
@@ -80,7 +81,7 @@ func HandleDynamicQuery(w http.ResponseWriter, r *http.Request) {
 	generatedSQL = aiResp.SQL
 	log.Printf("SQL Awal: %s", aiResp.SQL)
 
-	data, fixedSQL, execErr := ai.ExecuteWithRetry(*aiResp)
+	data, fixedSQL, execErr := ai.ExecuteWithRetryContext(r.Context(), *aiResp)
 	if execErr != nil {
 		finalStatus = "DB_ERROR"
 		finalError = execErr

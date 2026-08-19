@@ -12,7 +12,7 @@ func HandleGetAllUsersOracle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, status, err := GetAllUsersOracleUsecase()
+	data, status, err := GetAllUsersOracleUsecase(r.Context())
 	if err != nil {
 		log.Println("[modules][users][controller][GetAllUsersOracle] error:", err)
 		utils.WriteJSON(w, http.StatusBadRequest, map[string]interface{}{

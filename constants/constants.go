@@ -93,7 +93,7 @@ const (
 // LLM Models
 const (
 	// GroqModelFast is the fast Groq model for quick responses
-	GroqModelFast = "llama-3.1-8b-instant"
+	GroqModelFast = "meta-llama/llama-prompt-guard-2-22m"
 
 	// GroqModelDefault is the default model from config
 	GroqModelDefault = "qwen/qwen3.6-27b"

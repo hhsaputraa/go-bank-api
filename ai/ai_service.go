@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-
 	config "go-bank-api/config"
 	"go-bank-api/constants"
 	database "go-bank-api/database"
@@ -27,6 +26,8 @@ var (
 	qdrantClient    *pb.Client
 	geminiEmbedder  *genai.EmbeddingModel
 	sqlChainService *SQLChainService
+	reThinking      = regexp.MustCompile(`(?s)<thought>.*?</thought>`)
+	reSQLMarkdown   = regexp.MustCompile("(?s)```sql(.*?)```")
 )
 
 func InitVectorService() error {
@@ -216,7 +217,6 @@ func GetSQLWithModel(userPrompt string, modelName string) (models.AISqlResponse,
 		return models.AISqlResponse{}, err
 	}
 
-
 	finalPrompt := buildFinalPrompt(userPrompt, ragCtx.DDL, ragCtx.RefData, ragCtx.BusinessDict, ragCtx.SQLContext, softCacheContext)
 
 	cleanContent, err := executeSQLChain(ctx, userPrompt, finalPrompt, modelName, ragCtx, softCacheContext)
@@ -306,7 +306,6 @@ func executeSQLChain(ctx context.Context, userPrompt, finalPrompt, modelName str
 func extractAndSanitizeSQLResponse(cleanContent string) (string, error) {
 	sqlQuery := extractSQLFromMarkdown(cleanContent)
 
-	reThinking := regexp.MustCompile("(?s)<thought>.*?</thought>")
 	cleanContentText := reThinking.ReplaceAllString(cleanContent, "")
 	cleanContentText = strings.TrimSpace(cleanContentText)
 
@@ -388,7 +387,7 @@ Output:`
 		TopP:        1.0,
 	}
 
-	return callGroqAPI(finalPrompt, "llama-3.1-8b-instant", opts)
+	return callGroqAPI(finalPrompt, "meta-llama/llama-prompt-guard-2-22m", opts)
 }
 
 func RepairSQLFromAI(promptAsli string, sqlSalah string, pesanError string) (string, error) {
@@ -509,7 +508,6 @@ func getRAGContext(ctx context.Context, vector []float32) string {
 		return "TIDAK ADA CONTOH SQL. GUNAKAN LOGIKA SENDIRI."
 	}
 
-
 	if searchResponse[0].Score < constants.RAGMinimumScore {
 		log.Println("Score RAG rendah. Mengabaikan contoh RAG.")
 		return "TIDAK ADA CONTOH SQL YANG RELEVAN."
@@ -596,8 +594,7 @@ Pertanyaan Pengguna: "%s"
 }
 
 func extractSQLFromMarkdown(content string) string {
-	re := regexp.MustCompile("(?s)```sql(.*?)```")
-	matches := re.FindAllStringSubmatch(content, -1)
+	matches := reSQLMarkdown.FindAllStringSubmatch(content, -1)
 
 	var sqlQuery string
 	for _, match := range matches {
@@ -674,7 +671,6 @@ func searchRelevantDDL(ctx context.Context, promptVector []float32) (string, err
 		log.Println("[ai][ai_service][searchRelevantDDL] error:", err)
 		return "", err
 	}
-
 
 	var sb strings.Builder
 	count := 0
